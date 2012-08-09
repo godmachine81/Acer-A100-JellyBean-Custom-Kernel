@@ -1572,7 +1572,7 @@ int mmc_erase(struct mmc_card *card, unsigned int from, unsigned int nr,
 {
 	unsigned int rem, to = from + nr;
 
-	if (!(card->host->caps & MMC_CAP_ERASE) ||
+/*	if (!(card->host->caps & MMC_CAP_ERASE) ||
 	    !(card->csd.cmdclass & CCC_ERASE))
 		return -EOPNOTSUPP;
 
@@ -1618,15 +1618,19 @@ int mmc_erase(struct mmc_card *card, unsigned int from, unsigned int nr,
 	if (to <= from)
 		return -EINVAL;
 
-	/* 'from' and 'to' are inclusive */
+	//'from' and 'to' are inclusive 
 	to -= 1;
 
-	return mmc_do_erase(card, from, to, arg);
-}
+	return mmc_do_erase(card, from, to, arg); */
+        printk("%s: mmc_erase() disabled for protection. from = %u, nr = %u, arg = %u\n",
+                 __func__,from,nr,arg);
+        return -EOPNOTSUPP;
+} 
 EXPORT_SYMBOL(mmc_erase);
 
 int mmc_can_erase(struct mmc_card *card)
 {
+  	printk("%s: called\n",__func__);
 	if ((card->host->caps & MMC_CAP_ERASE) &&
 	    (card->csd.cmdclass & CCC_ERASE) && card->erase_size)
 		return 1;
