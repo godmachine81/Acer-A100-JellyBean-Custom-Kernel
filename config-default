@@ -1,7 +1,7 @@
 #
 # Automatically generated make config: don't edit
 # Linux/arm 2.6.39.4 Kernel Configuration
-# Wed Aug  8 20:32:16 2012
+# Wed Aug  8 20:34:53 2012
 #
 CONFIG_ARM=y
 CONFIG_HAVE_PWM=y
@@ -40,7 +40,7 @@ CONFIG_IRQ_WORK=y
 CONFIG_EXPERIMENTAL=y
 CONFIG_INIT_ENV_ARG_LIMIT=32
 CONFIG_CROSS_COMPILE=""
-CONFIG_LOCALVERSION="-godmachine-JellyBean-a100-AutoGroup-v1.0-pre"
+CONFIG_LOCALVERSION="-godmachine-JellyBean-a100-v1.0-pre"
 # CONFIG_LOCALVERSION_AUTO is not set
 CONFIG_HAVE_KERNEL_GZIP=y
 CONFIG_HAVE_KERNEL_LZMA=y
@@ -92,7 +92,7 @@ CONFIG_FAIR_GROUP_SCHED=y
 # CONFIG_RT_GROUP_SCHED is not set
 # CONFIG_BLK_CGROUP is not set
 # CONFIG_NAMESPACES is not set
-CONFIG_SCHED_AUTOGROUP=y
+# CONFIG_SCHED_AUTOGROUP is not set
 # CONFIG_SYSFS_DEPRECATED is not set
 # CONFIG_RELAY is not set
 CONFIG_BLK_DEV_INITRD=y
