@@ -43,6 +43,10 @@
 #define DVFS_RAIL_STATS_SCALE	2
 #define DVFS_RAIL_STATS_RANGE   ((DVFS_RAIL_STATS_TOP_BIN - 1) * \
 				 DVFS_RAIL_STATS_BIN / DVFS_RAIL_STATS_SCALE)
+#define FREQCOUNT 13
+
+extern int cpufrequency[FREQCOUNT];
+extern int cpuuvoffset[FREQCOUNT];
 
 static LIST_HEAD(dvfs_rail_list);
 static DEFINE_MUTEX(dvfs_lock);
@@ -216,8 +220,8 @@ static int dvfs_rail_set_voltage(struct dvfs_rail *rail, int millivolts)
 			rail->updating = false;
 		}
 		if (ret) {
-			pr_err("Failed to set dvfs regulator %s\n", rail->reg_id);
-			goto out;
+			pr_err("Failed to set dvfs regulator %s to %d (max %d)\n", rail->reg_id, rail->new_millivolts, rail->max_millivolts);
+			return ret;
 		}
 
 		rail->millivolts = rail->new_millivolts;
@@ -323,7 +327,7 @@ static int dvfs_rail_connect_to_regulator(struct dvfs_rail *rail)
 static int
 __tegra_dvfs_set_rate(struct dvfs *d, unsigned long rate)
 {
-	int i = 0;
+	int i = 0, j = 0, mvoffset = 0;
 	int ret;
 
 	if (d->freqs == NULL || d->millivolts == NULL)
@@ -347,7 +351,15 @@ __tegra_dvfs_set_rate(struct dvfs *d, unsigned long rate)
 				" %s\n", d->millivolts[i], d->clk_name);
 			return -EINVAL;
 		}
-		d->cur_millivolts = d->millivolts[i];
+		if (strcmp(d->clk_name, "cpu") == 0)
+		{
+			for (j = 0; j < FREQCOUNT; j++)
+				if (cpufrequency[j] == (rate / 1000)) break;
+			if (j < FREQCOUNT) mvoffset = cpuuvoffset[j];
+			else pr_warn("tegra_dvfs: failed to find undervolt amount for rate %lu\n", rate);
+		}
+
+		d->cur_millivolts = d->millivolts[i] - mvoffset;
 	}
 
 	d->cur_rate = rate;

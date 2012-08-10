@@ -35,6 +35,29 @@
 #define dprintk(msg...) cpufreq_debug_printk(CPUFREQ_DEBUG_CORE, \
 						"cpufreq-core", msg)
 
+/* Initial implementation of userspace voltage control */
+#if defined(CONFIG_TEGRA_OVERCLOCK)
+#define FREQCOUNT 11
+#else
+#define FREQCOUNT 9
+#endif
+
+#define CPUMVMAX 1400
+#define CPUMVMIN 700
+#if defined(CONFIG_TEGRA_OVERCLOCK)
+int cpufrequency[FREQCOUNT]  = { 216000, 312000, 456000, 608000, /*750000,*/ 760000, 816000, 912000, 1000000, 1200000, 1408000, 1504000 };
+#else
+int cpufrequency[FREQCOUNT]  = { 216000, 312000, 456000, 608000, 750000, 760000, 816000, 912000, 1000000, /*1200000*/ };
+#endif
+
+#if defined(CONFIG_TEGRA_OVERCLOCK)
+int cpuvoltage[FREQCOUNT] = {750, 775, 800, 825, /*850,*/ 875, 900, 925, 950, 1025, 1175, 1275/*, 1325*/};
+#else
+int cpuvoltage[FREQCOUNT] = {750, 775, 800, 825, 850, 875, 900, 925, 950, 975, /*1000, 1025, 1050, 1100, 1125*/};
+#endif
+
+int cpuuvoffset[15] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 , 0, 0};
+
 /**
  * The "cpufreq driver" - the arch- or hardware-dependent low
  * level driver of CPUFreq support, and its spinlock. This lock
@@ -680,6 +703,53 @@ static ssize_t show_bios_limit(struct cpufreq_policy *policy, char *buf)
 	return sprintf(buf, "%u\n", policy->cpuinfo.max_freq);
 }
 
+static ssize_t show_frequency_voltage_table(struct cpufreq_policy *policy, char *buf)
+{
+	char *table = buf;
+	int i;
+	for (i = FREQCOUNT-1; i >=0; i--)
+		table += sprintf(table, "%d %d %d\n", cpufrequency[i], cpuvoltage[i], (cpuvoltage[i]-cpuuvoffset[i]));
+	return table - buf;
+}
+
+static ssize_t show_UV_mV_table(struct cpufreq_policy *policy, char *buf)
+{
+	char *table = buf;
+	int i;
+
+	table += sprintf(table, "%d", cpuuvoffset[FREQCOUNT - 1]);
+	for (i = FREQCOUNT - 2; i > 0; i--)
+	{
+		table += sprintf(table, " %d", cpuuvoffset[i]);
+	}
+	table += sprintf(table, " %d\n", cpuuvoffset[0]);
+
+	return table - buf;
+}
+
+static ssize_t store_UV_mV_table(struct cpufreq_policy *policy, char *buf, size_t count)
+{
+	int tmptable[15];
+	int i;
+	unsigned int ret = sscanf(buf, "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d", &tmptable[0], &tmptable[1], &tmptable[2], &tmptable[3], &tmptable[4], &tmptable[5], &tmptable[6], &tmptable[7], &tmptable[8], &tmptable[9], &tmptable[10], &tmptable[11], &tmptable[12], &tmptable[13], &tmptable[14]);
+	if (ret != FREQCOUNT){
+        printk(KERN_INFO "UV_mV_table: Incorect item count: %d\n",ret);
+		return -EINVAL;
+    }
+	for (i = 0; i < FREQCOUNT; i++)
+	{
+		if ((cpuvoltage[FREQCOUNT-1-i]-tmptable[i]) > CPUMVMAX || (cpuvoltage[FREQCOUNT-1-i]-tmptable[i]) < CPUMVMIN) // Keep within constraints
+		{
+			printk(KERN_INFO "UV_mV_table: Out of range %dmV (%d)\n",cpuvoltage[FREQCOUNT-1-i]-tmptable[i],cpufrequency[FREQCOUNT-1-i]);
+			return -EINVAL;
+		} else {
+			printk(KERN_INFO "UV_mV_table: set to %dmV (%d)\n",cpuvoltage[FREQCOUNT-1-i]-tmptable[i],cpufrequency[FREQCOUNT-1-i]);
+			cpuuvoffset[FREQCOUNT-1-i] = tmptable[i];
+		}
+	}
+	return count;
+}
+
 cpufreq_freq_attr_ro_perm(cpuinfo_cur_freq, 0400);
 cpufreq_freq_attr_ro(cpuinfo_min_freq);
 cpufreq_freq_attr_ro(cpuinfo_max_freq);
@@ -690,10 +760,12 @@ cpufreq_freq_attr_ro(scaling_cur_freq);
 cpufreq_freq_attr_ro(bios_limit);
 cpufreq_freq_attr_ro(related_cpus);
 cpufreq_freq_attr_ro(affected_cpus);
+cpufreq_freq_attr_ro(frequency_voltage_table);
 cpufreq_freq_attr_rw(scaling_min_freq);
 cpufreq_freq_attr_rw(scaling_max_freq);
 cpufreq_freq_attr_rw(scaling_governor);
 cpufreq_freq_attr_rw(scaling_setspeed);
+cpufreq_freq_attr_rw(UV_mV_table);
 
 static struct attribute *default_attrs[] = {
 	&cpuinfo_min_freq.attr,
@@ -703,10 +775,12 @@ static struct attribute *default_attrs[] = {
 	&scaling_max_freq.attr,
 	&affected_cpus.attr,
 	&related_cpus.attr,
+	&frequency_voltage_table.attr,
 	&scaling_governor.attr,
 	&scaling_driver.attr,
 	&scaling_available_governors.attr,
 	&scaling_setspeed.attr,
+	&UV_mV_table.attr,
 	NULL
 };
 
