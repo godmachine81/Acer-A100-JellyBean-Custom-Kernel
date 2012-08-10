@@ -16,7 +16,7 @@ What's included:
 *I/O Schedulers: BFQ, CFQ, SIO, V(R), DEADLINE, NOOP
 *Vangogh configuration is set to use SCHED_AUTOGROUP to increase performance over the old CFS default scheduler
 *If you don't want autogroup, then you can use the "default" kernel which is explained below. 
-*CPU Governors: Lulzactive, Interactive, Ondemand, Powersave, Userspace, Performance (default interactive)
+*CPU Governors: Lulzactive, SmartassV2, Interactive, Ondemand, Powersave, Userspace, Performance (default interactive)
 *Alsa SoC Tiny HAL patch for better compatibility with Jelly Bean (reduces/eliminates popping sounds)
 
 What doesn't work:
