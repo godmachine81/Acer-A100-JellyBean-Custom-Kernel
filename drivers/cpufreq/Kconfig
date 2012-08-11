@@ -117,6 +117,41 @@ config CPU_FREQ_DEFAULT_GOV_SMARTASS2
   	 help
 	   Use the CPUFreq governor 'smartassV2' as default.
 
+config CPU_FREQ_DEFAULT_GOV_INTELLIDEMAND
+ 	 bool "intellidemand"
+  	 select CPU_FREQ_GOV_INTELLIDEMAND
+  	 help
+	  Use as default governor
+
+config CPU_FREQ_DEFAULT_GOV_SAVAGEDZEN
+ 	 bool "savagedzen"
+  	 select CPU_FREQ_GOV_SAVAGEDZEN
+  	 help
+
+config CPU_FREQ_DEFAULT_GOV_LAZY
+ 	 bool "lazy"
+  	 select CPU_FREQ_GOV_LAZY
+  	 help
+	  Use as default governor
+
+config CPU_FREQ_DEFAULT_GOV_LIONHEART
+ 	 bool "lionheart"
+  	 select CPU_FREQ_GOV_LIONHEART
+  	 help
+	  Use as default governor
+
+config CPU_FREQ_DEFAULT_GOV_WHEATLEY
+ 	 bool "wheatley"
+  	 select CPU_FREQ_GOV_WHEATLEY
+  	 help
+	  Use as default governor
+
+config CPU_FREQ_DEFAULT_GOV_SCARY
+ 	 bool "scary"
+  	 select CPU_FREQ_GOV_SCARY
+  	 help
+	  Use as default governor
+
 config CPU_FREQ_DEFAULT_GOV_LAGFREE
 	bool "lagfree"
 	select CPU_FREQ_GOV_LAGFREE
@@ -248,6 +283,42 @@ config CPU_FREQ_GOV_SMARTASS2
 	  'smartassV2' - a "smart" optimized governor for the hero!
 
 	   If in doubt, say N.
+
+config CPU_FREQ_GOV_INTELLIDEMAND
+	tristate "'intellidemand' cpufreq governor"
+	depends on CPU_FREQ
+	help
+	  Use as default governor
+
+config CPU_FREQ_GOV_SAVAGEDZEN
+	tristate "'savagedzen' cpufreq governor"
+	depends on CPU_FREQ
+	help
+	  Use as default governor
+
+config CPU_FREQ_GOV_WHEATLEY
+	tristate "'wheatley' cpufreq governor"
+	depends on CPU_FREQ
+	help
+	  Use as default governor
+
+config CPU_FREQ_GOV_LAZY
+	tristate "'lazy' cpufreq governor"
+	depends on CPU_FREQ
+	help
+	  Use as default governor
+
+config CPU_FREQ_GOV_SCARY
+	tristate "'scary' cpufreq governor"
+	depends on CPU_FREQ
+	help
+	  Use as default governor
+
+config CPU_FREQ_GOV_LIONHEART
+	tristate "'lionheart' cpufreq governor"
+	depends on CPU_FREQ
+	help
+	  Use as default governor
 
 config CPU_FREQ_GOV_LAGFREE
 	tristate "'lagfree' cpufreq governor"
