@@ -457,6 +457,8 @@ static void tegra_dsi_init_sw(struct tegra_dc *dc,
 	/* Calculate minimum required pixel rate. */
 	pixel_clk_hz = h_width_pixels * v_width_lines * dsi->info.refresh_rate;
 
+	dc->pixel_clk = pixel_clk_hz;
+
 	/* Calculate minimum byte rate on DSI interface. */
 	byte_clk_hz = (pixel_clk_hz * dsi->pixel_scaler_mul) /
 			(dsi->pixel_scaler_div * dsi->info.n_data_lanes);
@@ -941,23 +943,21 @@ static void tegra_dsi_set_dsi_clk(struct tegra_dc *dc,
 {
 	u32 rm;
 
-	/* Round up to MHz */
 	rm = clk % 1000;
 	if (rm != 0)
 		clk -= rm;
 
-	/* Set up pixel clock */
-	dc->shift_clk_div = dsi->shift_clk_div;
-	dc->mode.pclk = (clk * 1000) / dsi->shift_clk_div;
-
-	/* Enable DSI clock */
+	dc->mode.pclk = clk*1000;
 	tegra_dc_setup_clk(dc, dsi->dsi_clk);
-	if (!dsi->clk_ref) {
+	if (dsi->clk_ref == true)
+		clk_disable(dsi->dsi_clk);
+	else
 		dsi->clk_ref = true;
-		clk_enable(dsi->dsi_clk);
-		tegra_periph_reset_deassert(dsi->dsi_clk);
-	}
+	clk_enable(dsi->dsi_clk);
+	tegra_periph_reset_deassert(dsi->dsi_clk);
+
 	dsi->current_dsi_clk_khz = clk_get_rate(dsi->dsi_clk) / 1000;
+
 	dsi->current_bit_clk_ns =  1000*1000 / (dsi->current_dsi_clk_khz * 2);
 }
 

@@ -78,11 +78,11 @@ struct tegra_dc {
 	void __iomem			*base;
 	int				irq;
 
+	int				pixel_clk;
 	struct clk			*clk;
 	struct clk			*emc_clk;
 	int				emc_clk_rate;
 	int				new_emc_clk_rate;
-	u32				shift_clk_div;
 
 	bool				connected;
 	bool				enabled;
@@ -138,8 +138,6 @@ struct tegra_dc {
 	struct dentry			*debugdir;
 #endif
 	struct tegra_dc_lut		fb_lut;
-	struct delayed_work		underflow_work;
-	struct work_struct		one_shot_work;
 };
 
 static inline void tegra_dc_io_start(struct tegra_dc *dc)
