@@ -115,6 +115,7 @@ config DEFAULT_IOSCHED
 	default "sio" if DEFAULT_SIO
 	default "bfq" if DEFAULT_BFQ
 	default "noop" if DEFAULT_NOOP
+	default "vr" if DEFAULT_VR
 
 endmenu
 
