@@ -314,6 +314,18 @@ config CPU_FREQ_GOV_SCARY
 	help
 	  Use as default governor
 
+config CPU_FREQ_GOV_BRAZILIANWAX
+	tristate "'brazilianwax' cpufreq governor"
+	depends on CPU_FREQ
+	help
+	  Yet another governor by erasmux
+
+config CPU_FREQ_GOV_SMOOTHASS
+	tristate "'smoothass' cpufreq governor"
+	depends on CPU_FREQ
+	help
+	  Yet another governor by erasmux
+
 config CPU_FREQ_GOV_LIONHEART
 	tristate "'lionheart' cpufreq governor"
 	depends on CPU_FREQ
