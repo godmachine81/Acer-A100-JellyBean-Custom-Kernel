@@ -86,7 +86,7 @@ static unsigned long down_rate_us;
  * When ramping up frequency with no idle cycles jump to at least this frequency.
  * Zero disables. Set a very high value to jump to policy max freqeuncy.
  */
-#define DEFAULT_UP_MIN_FREQ 1900000
+#define DEFAULT_UP_MIN_FREQ 816000
 static unsigned int up_min_freq;
 
 /*
@@ -95,17 +95,17 @@ static unsigned int up_min_freq;
  * to minimize wakeup issues.
  * Set sleep_max_freq=0 to disable this behavior.
  */
-#define DEFAULT_SLEEP_MAX_FREQ 384000
+#define DEFAULT_SLEEP_MAX_FREQ 0
 static unsigned int sleep_max_freq;
 
 /*
  * The frequency to set when waking up from sleep.
  * When sleep_max_freq=0 this will have no effect.
  */
-#define DEFAULT_SLEEP_WAKEUP_FREQ 998400
+#define DEFAULT_SLEEP_WAKEUP_FREQ 0
 static unsigned int sleep_wakeup_freq;
 
-#define UP_THRESHOLD_FREQ 1800000
+#define UP_THRESHOLD_FREQ 180000
 static unsigned int threshold_freq;
 
 /*
@@ -113,10 +113,10 @@ static unsigned int threshold_freq;
  * go below this frequency.
  * Set awake_min_freq=0 to disable this behavior.
  */
-#define DEFAULT_AWAKE_MIN_FREQ 122000
+#define DEFAULT_AWAKE_MIN_FREQ 216000
 static unsigned int awake_min_freq;
 
-static unsigned int suspendfreq = 384000;
+static unsigned int suspendfreq = 456000;
 
 /*
  * Sampling rate, I highly recommend to leave it at 2.
@@ -135,7 +135,7 @@ static unsigned int ramp_up_step;
  * Miminum Freqeuncy delta when ramping down.
  * zero disables and will calculate ramp down according to load heuristic.
  */
-#define DEFAULT_RAMP_DOWN_STEP 384000
+#define DEFAULT_RAMP_DOWN_STEP 0
 static unsigned int ramp_down_step;
 
 /*
@@ -165,7 +165,7 @@ static
 struct cpufreq_governor cpufreq_gov_brazilianwax = {
         .name = "brazilianwax",
         .governor = cpufreq_governor_brazilianwax,
-        .max_transition_latency = 9000000,
+        .max_transition_latency = 1000000,
         .owner = THIS_MODULE,
 };
 
@@ -253,7 +253,7 @@ static void cpufreq_brazilianwax_timer(unsigned long data)
 		new_rate = up_rate_us;
 
 		// minimize going above 1.8Ghz
-		if (policy->cur > up_min_freq) new_rate = 75000;
+		if (policy->cur > up_min_freq) new_rate = 1682000;
 
                 if (cputime64_sub(update_time, this_brazilianwax->freq_change_time) < new_rate) 
                         return;
