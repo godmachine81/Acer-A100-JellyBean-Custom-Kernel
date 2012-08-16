@@ -31,21 +31,8 @@ DHDCFLAGS += -DHW_OOB
 else
 DHDCFLAGS += -DSDIO_ISR_THREAD
 endif
-
-ifeq ($(TARGET_USE_NEW_TOOLCHAIN),1)
-  # gcc-4.6.1 warns a lot more than previous compilers.
-  # The following is the minimal set of warnings that need to not error out
-  # the build for it to succeed. -Wno-error would also work, but this
-  # explicit list allows them to be fixed in smaller chunks.
-  DHDCFLAGS += -Wno-error=unused-but-set-variable
-  DHDCFLAGS += -Wno-error=array-bounds
-endif
-
-ifeq "$(shell $(CC) --version | grep gcc | sed 's/^.* //g')" "4.6.3"
-  # 4.6.3 toolchain has many false positives as above
-  DHDCFLAGS += -Wno-error=unused-but-set-variable
-  DHDCFLAGS += -Wno-error=array-bounds
-endif
+DHDCFLAGS += -Wno-error=unused-but-set-variable
+DHDCFLAGS += -Wno-error=array-bounds
 
 DHDOFILES = dhd_linux.o linux_osl.o bcmutils.o dhd_common.o dhd_custom_gpio.o \
 	wl_iw.o siutils.o sbutils.o aiutils.o hndpmu.o bcmwifi.o dhd_sdio.o   \
