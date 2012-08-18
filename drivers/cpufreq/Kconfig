@@ -134,6 +134,12 @@ config CPU_FREQ_DEFAULT_GOV_LAZY
   	 help
 	  Use as default governor
 
+config CPU_FREQ_DEFAULT_GOV_MINMAX
+	bool "minmax"
+	select CPU_FREQ_GOV_MINMAX
+	help
+	  Use 'minmax' as default gov
+
 config CPU_FREQ_DEFAULT_GOV_LIONHEART
  	 bool "lionheart"
   	 select CPU_FREQ_GOV_LIONHEART
@@ -325,6 +331,15 @@ config CPU_FREQ_GOV_LIONHEART
 	depends on CPU_FREQ
 	help
 	  Use as default governor
+
+config CPU_FREQ_GOV_MINMAX
+	tristate "'minmax' cpufreq governor"
+	depends on CPU_FREQ
+	help
+	  'minmax' is aimed to be a simple
+	   governor that ramps up freq to max
+	   on load increase, and back to min
+	   freq on load decrease. 
 
 config CPU_FREQ_GOV_LAGFREE
 	tristate "'lagfree' cpufreq governor"
