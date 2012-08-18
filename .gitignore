@@ -79,3 +79,7 @@ GTAGS
 *.orig
 *~
 \#*#
+a500.out/*
+a100.out/*
+a200.out/*
+
