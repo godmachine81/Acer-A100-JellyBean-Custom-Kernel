@@ -9,6 +9,8 @@
 #
 # Normal rules
 #
+.gitignore
+*.easter
 .*
 *.o
 *.o.*
