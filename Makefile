@@ -1,8 +1,8 @@
-VERSION = 2
-PATCHLEVEL = 6
-SUBLEVEL = 39
-EXTRAVERSION = .4
-NAME = Flesh-Eating Bats with Fangs
+VERSION = 3
+PATCHLEVEL = 5
+SUBLEVEL = 0
+EXTRAVERSION = 
+NAME = Saber-toothed Squirrel
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
