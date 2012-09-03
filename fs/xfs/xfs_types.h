@@ -57,6 +57,7 @@ typedef __uint64_t __psunsigned_t;
 #endif	/* __KERNEL__ */
 
 typedef __uint32_t	xfs_agblock_t;	/* blockno in alloc. group */
+typedef	__uint32_t	xfs_agino_t;	/* inode # within allocation grp */
 typedef	__uint32_t	xfs_extlen_t;	/* extent length in blocks */
 typedef	__uint32_t	xfs_agnumber_t;	/* allocation group number */
 typedef __int32_t	xfs_extnum_t;	/* # of extents in a file */
@@ -72,8 +73,6 @@ typedef	__int32_t	xfs_tid_t;	/* transaction identifier */
 
 typedef	__uint32_t	xfs_dablk_t;	/* dir/attr block number (in file) */
 typedef	__uint32_t	xfs_dahash_t;	/* dir/attr hash value */
-
-typedef __uint32_t	xlog_tid_t;	/* transaction ID type */
 
 /*
  * These types are 64 bits on disk but are either 32 or 64 bits in memory.
@@ -103,6 +102,7 @@ typedef __uint64_t	xfs_fileoff_t;	/* block number in a file */
 typedef __int64_t	xfs_sfiloff_t;	/* signed block number in a file */
 typedef __uint64_t	xfs_filblks_t;	/* number of blocks in a file */
 
+
 /*
  * Null values for the types.
  */
@@ -121,6 +121,9 @@ typedef __uint64_t	xfs_filblks_t;	/* number of blocks in a file */
 #define	NULLEXTNUM	((xfs_extnum_t)-1)
 
 #define NULLCOMMITLSN	((xfs_lsn_t)-1)
+
+#define	NULLFSINO	((xfs_ino_t)-1)
+#define	NULLAGINO	((xfs_agino_t)-1)
 
 /*
  * Max values for extlen, extnum, aextnum.

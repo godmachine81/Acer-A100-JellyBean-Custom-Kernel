@@ -55,18 +55,20 @@ static DECLARE_TASKLET(resend_tasklet, resend_irqs, 0);
  */
 void check_irq_resend(struct irq_desc *desc, unsigned int irq)
 {
+	/*
+	 * We do not resend level type interrupts. Level type
+	 * interrupts are resent by hardware when they are still
+	 * active. Clear the pending bit so suspend/resume does not
+	 * get confused.
+	 */
+	if (irq_settings_is_level(desc)) {
+		desc->istate &= ~IRQS_PENDING;
+		return;
+	}
+	if (desc->istate & IRQS_REPLAY)
+		return;
 	if (desc->istate & IRQS_PENDING) {
 		desc->istate &= ~IRQS_PENDING;
-		/*
-		 * We do not resend level type interrupts. Level type
-		 * interrupts are resent by hardware when they are still
-		 * active.
-		 */
-		if (irq_settings_is_level(desc))
-			return;
-		if (desc->istate & IRQS_REPLAY)
-			return;
-
 		desc->istate |= IRQS_REPLAY;
 
 		if (!desc->irq_data.chip->irq_retrigger ||

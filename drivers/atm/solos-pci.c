@@ -527,7 +527,6 @@ static int flash_upgrade(struct solos_card *card, int chip)
 {
 	const struct firmware *fw;
 	const char *fw_name;
-	uint32_t data32 = 0;
 	int blocksize = 0;
 	int numblocks = 0;
 	int offset;
@@ -576,7 +575,7 @@ static int flash_upgrade(struct solos_card *card, int chip)
 	
 	dev_info(&card->dev->dev, "Changing FPGA to Update mode\n");
 	iowrite32(1, card->config_regs + FPGA_MODE);
-	data32 = ioread32(card->config_regs + FPGA_MODE); 
+	(void) ioread32(card->config_regs + FPGA_MODE); 
 
 	/* Set mode to Chip Erase */
 	if(chip == 0 || chip == 2)
@@ -985,6 +984,7 @@ static uint32_t fpga_tx(struct solos_card *card)
 			} else if (skb && card->using_dma) {
 				SKB_CB(skb)->dma_addr = pci_map_single(card->dev, skb->data,
 								       skb->len, PCI_DMA_TODEVICE);
+				card->tx_skb[port] = skb;
 				iowrite32(SKB_CB(skb)->dma_addr,
 					  card->config_regs + TX_DMA_ADDR(port));
 			}
@@ -1153,7 +1153,8 @@ static int fpga_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		db_fpga_upgrade = db_firmware_upgrade = 0;
 	}
 
-	if (card->fpga_version >= DMA_SUPPORTED){
+	if (card->fpga_version >= DMA_SUPPORTED) {
+		pci_set_master(dev);
 		card->using_dma = 1;
 	} else {
 		card->using_dma = 0;
@@ -1207,9 +1208,9 @@ static int fpga_probe(struct pci_dev *dev, const struct pci_device_id *id)
 	
  out_unmap_both:
 	pci_set_drvdata(dev, NULL);
-	pci_iounmap(dev, card->config_regs);
- out_unmap_config:
 	pci_iounmap(dev, card->buffers);
+ out_unmap_config:
+	pci_iounmap(dev, card->config_regs);
  out_release_regions:
 	pci_release_regions(dev);
  out:

@@ -56,6 +56,7 @@ STATIC inline int INIT parse_header(u8 *input, int *skip, int in_len)
 	int l;
 	u8 *parse = input;
 	u8 *end = input + in_len;
+	u8 level = 0;
 	u16 version;
 
 	/*
@@ -77,7 +78,7 @@ STATIC inline int INIT parse_header(u8 *input, int *skip, int in_len)
 	version = get_unaligned_be16(parse);
 	parse += 7;
 	if (version >= 0x0940)
-		*parse++;
+		level = *parse++;
 	if (get_unaligned_be32(parse) & HEADER_HAS_FILTER)
 		parse += 8; /* flags + filter info */
 	else
@@ -278,7 +279,7 @@ STATIC inline int INIT unlzo(u8 *input, int in_len,
 	ret = 0;
 exit_2:
 	if (!input)
-		free(in_buf);
+		free(in_buf_save);
 exit_1:
 	if (!output)
 		free(out_buf);

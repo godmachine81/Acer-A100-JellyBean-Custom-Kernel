@@ -41,7 +41,7 @@
 /*
  * Allow hardware encryption to be disabled.
  */
-static int modparam_nohwcrypt = 0;
+static bool modparam_nohwcrypt = false;
 module_param_named(nohwcrypt, modparam_nohwcrypt, bool, S_IRUGO);
 MODULE_PARM_DESC(nohwcrypt, "Disable hardware encryption.");
 
@@ -683,7 +683,7 @@ static void rt61pci_config_antenna_2x(struct rt2x00_dev *rt2x00dev,
 
 	rt2x00_set_field8(&r3, BBP_R3_SMART_MODE, rt2x00_rf(rt2x00dev, RF2529));
 	rt2x00_set_field8(&r4, BBP_R4_RX_FRAME_END,
-			  !test_bit(CONFIG_FRAME_TYPE, &rt2x00dev->flags));
+			  !test_bit(CAPABILITY_FRAME_TYPE, &rt2x00dev->cap_flags));
 
 	/*
 	 * Configure the RX antenna.
@@ -811,10 +811,10 @@ static void rt61pci_config_ant(struct rt2x00_dev *rt2x00dev,
 
 	if (rt2x00dev->curr_band == IEEE80211_BAND_5GHZ) {
 		sel = antenna_sel_a;
-		lna = test_bit(CONFIG_EXTERNAL_LNA_A, &rt2x00dev->flags);
+		lna = test_bit(CAPABILITY_EXTERNAL_LNA_A, &rt2x00dev->cap_flags);
 	} else {
 		sel = antenna_sel_bg;
-		lna = test_bit(CONFIG_EXTERNAL_LNA_BG, &rt2x00dev->flags);
+		lna = test_bit(CAPABILITY_EXTERNAL_LNA_BG, &rt2x00dev->cap_flags);
 	}
 
 	for (i = 0; i < ARRAY_SIZE(antenna_sel_a); i++)
@@ -834,7 +834,7 @@ static void rt61pci_config_ant(struct rt2x00_dev *rt2x00dev,
 	else if (rt2x00_rf(rt2x00dev, RF2527))
 		rt61pci_config_antenna_2x(rt2x00dev, ant);
 	else if (rt2x00_rf(rt2x00dev, RF2529)) {
-		if (test_bit(CONFIG_DOUBLE_ANTENNA, &rt2x00dev->flags))
+		if (test_bit(CAPABILITY_DOUBLE_ANTENNA, &rt2x00dev->cap_flags))
 			rt61pci_config_antenna_2x(rt2x00dev, ant);
 		else
 			rt61pci_config_antenna_2529(rt2x00dev, ant);
@@ -848,13 +848,13 @@ static void rt61pci_config_lna_gain(struct rt2x00_dev *rt2x00dev,
 	short lna_gain = 0;
 
 	if (libconf->conf->channel->band == IEEE80211_BAND_2GHZ) {
-		if (test_bit(CONFIG_EXTERNAL_LNA_BG, &rt2x00dev->flags))
+		if (test_bit(CAPABILITY_EXTERNAL_LNA_BG, &rt2x00dev->cap_flags))
 			lna_gain += 14;
 
 		rt2x00_eeprom_read(rt2x00dev, EEPROM_RSSI_OFFSET_BG, &eeprom);
 		lna_gain -= rt2x00_get_field16(eeprom, EEPROM_RSSI_OFFSET_BG_1);
 	} else {
-		if (test_bit(CONFIG_EXTERNAL_LNA_A, &rt2x00dev->flags))
+		if (test_bit(CAPABILITY_EXTERNAL_LNA_A, &rt2x00dev->cap_flags))
 			lna_gain += 14;
 
 		rt2x00_eeprom_read(rt2x00dev, EEPROM_RSSI_OFFSET_A, &eeprom);
@@ -1050,14 +1050,14 @@ static void rt61pci_link_tuner(struct rt2x00_dev *rt2x00dev,
 	if (rt2x00dev->curr_band == IEEE80211_BAND_5GHZ) {
 		low_bound = 0x28;
 		up_bound = 0x48;
-		if (test_bit(CONFIG_EXTERNAL_LNA_A, &rt2x00dev->flags)) {
+		if (test_bit(CAPABILITY_EXTERNAL_LNA_A, &rt2x00dev->cap_flags)) {
 			low_bound += 0x10;
 			up_bound += 0x10;
 		}
 	} else {
 		low_bound = 0x20;
 		up_bound = 0x40;
-		if (test_bit(CONFIG_EXTERNAL_LNA_BG, &rt2x00dev->flags)) {
+		if (test_bit(CAPABILITY_EXTERNAL_LNA_BG, &rt2x00dev->cap_flags)) {
 			low_bound += 0x10;
 			up_bound += 0x10;
 		}
@@ -1142,11 +1142,6 @@ static void rt61pci_start_queue(struct data_queue *queue)
 		rt2x00pci_register_write(rt2x00dev, TXRX_CSR0, reg);
 		break;
 	case QID_BEACON:
-		/*
-		 * Allow the tbtt tasklet to be scheduled.
-		 */
-		tasklet_enable(&rt2x00dev->tbtt_tasklet);
-
 		rt2x00pci_register_read(rt2x00dev, TXRX_CSR9, &reg);
 		rt2x00_set_field32(&reg, TXRX_CSR9_TSF_TICKING, 1);
 		rt2x00_set_field32(&reg, TXRX_CSR9_TBTT_ENABLE, 1);
@@ -1230,7 +1225,7 @@ static void rt61pci_stop_queue(struct data_queue *queue)
 		/*
 		 * Wait for possibly running tbtt tasklets.
 		 */
-		tasklet_disable(&rt2x00dev->tbtt_tasklet);
+		tasklet_kill(&rt2x00dev->tbtt_tasklet);
 		break;
 	default:
 		break;
@@ -1731,13 +1726,6 @@ static void rt61pci_toggle_irq(struct rt2x00_dev *rt2x00dev,
 
 		rt2x00pci_register_read(rt2x00dev, MCU_INT_SOURCE_CSR, &reg);
 		rt2x00pci_register_write(rt2x00dev, MCU_INT_SOURCE_CSR, reg);
-
-		/*
-		 * Enable tasklets.
-		 */
-		tasklet_enable(&rt2x00dev->txstatus_tasklet);
-		tasklet_enable(&rt2x00dev->rxdone_tasklet);
-		tasklet_enable(&rt2x00dev->autowake_tasklet);
 	}
 
 	/*
@@ -1772,9 +1760,10 @@ static void rt61pci_toggle_irq(struct rt2x00_dev *rt2x00dev,
 		/*
 		 * Ensure that all tasklets are finished.
 		 */
-		tasklet_disable(&rt2x00dev->txstatus_tasklet);
-		tasklet_disable(&rt2x00dev->rxdone_tasklet);
-		tasklet_disable(&rt2x00dev->autowake_tasklet);
+		tasklet_kill(&rt2x00dev->txstatus_tasklet);
+		tasklet_kill(&rt2x00dev->rxdone_tasklet);
+		tasklet_kill(&rt2x00dev->autowake_tasklet);
+		tasklet_kill(&rt2x00dev->tbtt_tasklet);
 	}
 }
 
@@ -2260,8 +2249,8 @@ static void rt61pci_wakeup(struct rt2x00_dev *rt2x00dev)
 	rt61pci_config(rt2x00dev, &libconf, IEEE80211_CONF_CHANGE_PS);
 }
 
-static void rt61pci_enable_interrupt(struct rt2x00_dev *rt2x00dev,
-				     struct rt2x00_field32 irq_field)
+static inline void rt61pci_enable_interrupt(struct rt2x00_dev *rt2x00dev,
+					    struct rt2x00_field32 irq_field)
 {
 	u32 reg;
 
@@ -2300,21 +2289,25 @@ static void rt61pci_txstatus_tasklet(unsigned long data)
 {
 	struct rt2x00_dev *rt2x00dev = (struct rt2x00_dev *)data;
 	rt61pci_txdone(rt2x00dev);
-	rt61pci_enable_interrupt(rt2x00dev, INT_MASK_CSR_TXDONE);
+	if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags))
+		rt61pci_enable_interrupt(rt2x00dev, INT_MASK_CSR_TXDONE);
 }
 
 static void rt61pci_tbtt_tasklet(unsigned long data)
 {
 	struct rt2x00_dev *rt2x00dev = (struct rt2x00_dev *)data;
 	rt2x00lib_beacondone(rt2x00dev);
-	rt61pci_enable_interrupt(rt2x00dev, INT_MASK_CSR_BEACON_DONE);
+	if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags))
+		rt61pci_enable_interrupt(rt2x00dev, INT_MASK_CSR_BEACON_DONE);
 }
 
 static void rt61pci_rxdone_tasklet(unsigned long data)
 {
 	struct rt2x00_dev *rt2x00dev = (struct rt2x00_dev *)data;
-	rt2x00pci_rxdone(rt2x00dev);
-	rt61pci_enable_interrupt(rt2x00dev, INT_MASK_CSR_RXDONE);
+	if (rt2x00pci_rxdone(rt2x00dev))
+		tasklet_schedule(&rt2x00dev->rxdone_tasklet);
+	else if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags))
+		rt61pci_enable_interrupt(rt2x00dev, INT_MASK_CSR_RXDONE);
 }
 
 static void rt61pci_autowake_tasklet(unsigned long data)
@@ -2323,7 +2316,8 @@ static void rt61pci_autowake_tasklet(unsigned long data)
 	rt61pci_wakeup(rt2x00dev);
 	rt2x00pci_register_write(rt2x00dev,
 				 M2H_CMD_DONE_CSR, 0xffffffff);
-	rt61pci_enable_mcu_interrupt(rt2x00dev, MCU_INT_MASK_CSR_TWAKEUP);
+	if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags))
+		rt61pci_enable_mcu_interrupt(rt2x00dev, MCU_INT_MASK_CSR_TWAKEUP);
 }
 
 static irqreturn_t rt61pci_interrupt(int irq, void *dev_instance)
@@ -2535,7 +2529,7 @@ static int rt61pci_init_eeprom(struct rt2x00_dev *rt2x00dev)
 	 * Determine number of antennas.
 	 */
 	if (rt2x00_get_field16(eeprom, EEPROM_ANTENNA_NUM) == 2)
-		__set_bit(CONFIG_DOUBLE_ANTENNA, &rt2x00dev->flags);
+		__set_bit(CAPABILITY_DOUBLE_ANTENNA, &rt2x00dev->cap_flags);
 
 	/*
 	 * Identify default antenna configuration.
@@ -2549,20 +2543,20 @@ static int rt61pci_init_eeprom(struct rt2x00_dev *rt2x00dev)
 	 * Read the Frame type.
 	 */
 	if (rt2x00_get_field16(eeprom, EEPROM_ANTENNA_FRAME_TYPE))
-		__set_bit(CONFIG_FRAME_TYPE, &rt2x00dev->flags);
+		__set_bit(CAPABILITY_FRAME_TYPE, &rt2x00dev->cap_flags);
 
 	/*
 	 * Detect if this device has a hardware controlled radio.
 	 */
 	if (rt2x00_get_field16(eeprom, EEPROM_ANTENNA_HARDWARE_RADIO))
-		__set_bit(CONFIG_SUPPORT_HW_BUTTON, &rt2x00dev->flags);
+		__set_bit(CAPABILITY_HW_BUTTON, &rt2x00dev->cap_flags);
 
 	/*
 	 * Read frequency offset and RF programming sequence.
 	 */
 	rt2x00_eeprom_read(rt2x00dev, EEPROM_FREQ, &eeprom);
 	if (rt2x00_get_field16(eeprom, EEPROM_FREQ_SEQ))
-		__set_bit(CONFIG_RF_SEQUENCE, &rt2x00dev->flags);
+		__set_bit(CAPABILITY_RF_SEQUENCE, &rt2x00dev->cap_flags);
 
 	rt2x00dev->freq_offset = rt2x00_get_field16(eeprom, EEPROM_FREQ_OFFSET);
 
@@ -2572,9 +2566,9 @@ static int rt61pci_init_eeprom(struct rt2x00_dev *rt2x00dev)
 	rt2x00_eeprom_read(rt2x00dev, EEPROM_NIC, &eeprom);
 
 	if (rt2x00_get_field16(eeprom, EEPROM_NIC_EXTERNAL_LNA_A))
-		__set_bit(CONFIG_EXTERNAL_LNA_A, &rt2x00dev->flags);
+		__set_bit(CAPABILITY_EXTERNAL_LNA_A, &rt2x00dev->cap_flags);
 	if (rt2x00_get_field16(eeprom, EEPROM_NIC_EXTERNAL_LNA_BG))
-		__set_bit(CONFIG_EXTERNAL_LNA_BG, &rt2x00dev->flags);
+		__set_bit(CAPABILITY_EXTERNAL_LNA_BG, &rt2x00dev->cap_flags);
 
 	/*
 	 * When working with a RF2529 chip without double antenna,
@@ -2582,7 +2576,7 @@ static int rt61pci_init_eeprom(struct rt2x00_dev *rt2x00dev)
 	 * eeprom word.
 	 */
 	if (rt2x00_rf(rt2x00dev, RF2529) &&
-	    !test_bit(CONFIG_DOUBLE_ANTENNA, &rt2x00dev->flags)) {
+	    !test_bit(CAPABILITY_DOUBLE_ANTENNA, &rt2x00dev->cap_flags)) {
 		rt2x00dev->default_ant.rx =
 		    ANTENNA_A + rt2x00_get_field16(eeprom, EEPROM_NIC_RX_FIXED);
 		rt2x00dev->default_ant.tx =
@@ -2797,7 +2791,7 @@ static int rt61pci_probe_hw_mode(struct rt2x00_dev *rt2x00dev)
 	spec->supported_bands = SUPPORT_BAND_2GHZ;
 	spec->supported_rates = SUPPORT_RATE_CCK | SUPPORT_RATE_OFDM;
 
-	if (!test_bit(CONFIG_RF_SEQUENCE, &rt2x00dev->flags)) {
+	if (!test_bit(CAPABILITY_RF_SEQUENCE, &rt2x00dev->cap_flags)) {
 		spec->num_channels = 14;
 		spec->channels = rf_vals_noseq;
 	} else {
@@ -2867,16 +2861,16 @@ static int rt61pci_probe_hw(struct rt2x00_dev *rt2x00dev)
 	 * This device has multiple filters for control frames,
 	 * but has no a separate filter for PS Poll frames.
 	 */
-	__set_bit(DRIVER_SUPPORT_CONTROL_FILTERS, &rt2x00dev->flags);
+	__set_bit(CAPABILITY_CONTROL_FILTERS, &rt2x00dev->cap_flags);
 
 	/*
 	 * This device requires firmware and DMA mapped skbs.
 	 */
-	__set_bit(DRIVER_REQUIRE_FIRMWARE, &rt2x00dev->flags);
-	__set_bit(DRIVER_REQUIRE_DMA, &rt2x00dev->flags);
+	__set_bit(REQUIRE_FIRMWARE, &rt2x00dev->cap_flags);
+	__set_bit(REQUIRE_DMA, &rt2x00dev->cap_flags);
 	if (!modparam_nohwcrypt)
-		__set_bit(CONFIG_SUPPORT_HW_CRYPTO, &rt2x00dev->flags);
-	__set_bit(DRIVER_SUPPORT_LINK_TUNING, &rt2x00dev->flags);
+		__set_bit(CAPABILITY_HW_CRYPTO, &rt2x00dev->cap_flags);
+	__set_bit(CAPABILITY_LINK_TUNING, &rt2x00dev->cap_flags);
 
 	/*
 	 * Set the rssi offset.
@@ -2889,7 +2883,8 @@ static int rt61pci_probe_hw(struct rt2x00_dev *rt2x00dev)
 /*
  * IEEE80211 stack callback functions.
  */
-static int rt61pci_conf_tx(struct ieee80211_hw *hw, u16 queue_idx,
+static int rt61pci_conf_tx(struct ieee80211_hw *hw,
+			   struct ieee80211_vif *vif, u16 queue_idx,
 			   const struct ieee80211_tx_queue_params *params)
 {
 	struct rt2x00_dev *rt2x00dev = hw->priv;
@@ -2905,7 +2900,7 @@ static int rt61pci_conf_tx(struct ieee80211_hw *hw, u16 queue_idx,
 	 * we are free to update the registers based on the value
 	 * in the queue parameter.
 	 */
-	retval = rt2x00mac_conf_tx(hw, queue_idx, params);
+	retval = rt2x00mac_conf_tx(hw, vif, queue_idx, params);
 	if (retval)
 		return retval;
 
@@ -2946,7 +2941,7 @@ static int rt61pci_conf_tx(struct ieee80211_hw *hw, u16 queue_idx,
 	return 0;
 }
 
-static u64 rt61pci_get_tsf(struct ieee80211_hw *hw)
+static u64 rt61pci_get_tsf(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 {
 	struct rt2x00_dev *rt2x00dev = hw->priv;
 	u64 tsf;
@@ -2977,6 +2972,10 @@ static const struct ieee80211_ops rt61pci_mac80211_ops = {
 	.get_tsf		= rt61pci_get_tsf,
 	.rfkill_poll		= rt2x00mac_rfkill_poll,
 	.flush			= rt2x00mac_flush,
+	.set_antenna		= rt2x00mac_set_antenna,
+	.get_antenna		= rt2x00mac_get_antenna,
+	.get_ringparam		= rt2x00mac_get_ringparam,
+	.tx_frames_pending	= rt2x00mac_tx_frames_pending,
 };
 
 static const struct rt2x00lib_ops rt61pci_rt2x00_ops = {
@@ -3001,6 +3000,7 @@ static const struct rt2x00lib_ops rt61pci_rt2x00_ops = {
 	.start_queue		= rt61pci_start_queue,
 	.kick_queue		= rt61pci_kick_queue,
 	.stop_queue		= rt61pci_stop_queue,
+	.flush_queue		= rt2x00pci_flush_queue,
 	.write_tx_desc		= rt61pci_write_tx_desc,
 	.write_beacon		= rt61pci_write_beacon,
 	.clear_beacon		= rt61pci_clear_beacon,
@@ -3058,11 +3058,11 @@ static const struct rt2x00_ops rt61pci_ops = {
  */
 static DEFINE_PCI_DEVICE_TABLE(rt61pci_device_table) = {
 	/* RT2561s */
-	{ PCI_DEVICE(0x1814, 0x0301), PCI_DEVICE_DATA(&rt61pci_ops) },
+	{ PCI_DEVICE(0x1814, 0x0301) },
 	/* RT2561 v2 */
-	{ PCI_DEVICE(0x1814, 0x0302), PCI_DEVICE_DATA(&rt61pci_ops) },
+	{ PCI_DEVICE(0x1814, 0x0302) },
 	/* RT2661 */
-	{ PCI_DEVICE(0x1814, 0x0401), PCI_DEVICE_DATA(&rt61pci_ops) },
+	{ PCI_DEVICE(0x1814, 0x0401) },
 	{ 0, }
 };
 
@@ -3077,24 +3077,19 @@ MODULE_FIRMWARE(FIRMWARE_RT2561s);
 MODULE_FIRMWARE(FIRMWARE_RT2661);
 MODULE_LICENSE("GPL");
 
+static int rt61pci_probe(struct pci_dev *pci_dev,
+			 const struct pci_device_id *id)
+{
+	return rt2x00pci_probe(pci_dev, &rt61pci_ops);
+}
+
 static struct pci_driver rt61pci_driver = {
 	.name		= KBUILD_MODNAME,
 	.id_table	= rt61pci_device_table,
-	.probe		= rt2x00pci_probe,
+	.probe		= rt61pci_probe,
 	.remove		= __devexit_p(rt2x00pci_remove),
 	.suspend	= rt2x00pci_suspend,
 	.resume		= rt2x00pci_resume,
 };
 
-static int __init rt61pci_init(void)
-{
-	return pci_register_driver(&rt61pci_driver);
-}
-
-static void __exit rt61pci_exit(void)
-{
-	pci_unregister_driver(&rt61pci_driver);
-}
-
-module_init(rt61pci_init);
-module_exit(rt61pci_exit);
+module_pci_driver(rt61pci_driver);

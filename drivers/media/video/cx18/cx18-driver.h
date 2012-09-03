@@ -25,7 +25,6 @@
 #ifndef CX18_DRIVER_H
 #define CX18_DRIVER_H
 
-#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/init.h>
@@ -45,8 +44,6 @@
 #include <linux/slab.h>
 #include <asm/byteorder.h>
 
-#include <linux/dvb/video.h>
-#include <linux/dvb/audio.h>
 #include <media/v4l2-common.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-device.h>
@@ -64,6 +61,10 @@
 #include "dvb_frontend.h"
 #include "dvb_net.h"
 #include "dvbdev.h"
+
+/* Videobuf / YUV support */
+#include <media/videobuf-core.h>
+#include <media/videobuf-vmalloc.h>
 
 #ifndef CONFIG_PCI
 #  error "This driver requires kernel PCI support."
@@ -403,6 +404,24 @@ struct cx18_stream {
 	struct cx18_queue q_idle;	/* idle - not in rotation */
 
 	struct work_struct out_work_order;
+
+	/* Videobuf for YUV video */
+	u32 pixelformat;
+	u32 vb_bytes_per_frame;
+	struct list_head vb_capture;    /* video capture queue */
+	spinlock_t vb_lock;
+	struct timer_list vb_timeout;
+
+	struct videobuf_queue vbuf_q;
+	spinlock_t vbuf_q_lock; /* Protect vbuf_q */
+	enum v4l2_buf_type vb_type;
+};
+
+struct cx18_videobuf_buffer {
+	/* Common video buffer sub-system struct */
+	struct videobuf_buffer vb;
+	v4l2_std_id tvnorm; /* selected tv norm */
+	u32 bytes_used;
 };
 
 struct cx18_open_id {
@@ -603,7 +622,7 @@ struct cx18 {
 				   unique ID. Starts at 1, so 0 can be used as
 				   uninitialized value in the stream->id. */
 
-	u32 base_addr;
+	resource_size_t base_addr;
 
 	u8 card_rev;
 	void __iomem *enc_mem, *reg_mem;

@@ -16,7 +16,6 @@ asmlinkage long sys_ni_syscall(void)
 	return -ENOSYS;
 }
 
-cond_syscall(sys_nfsservctl);
 cond_syscall(sys_quotactl);
 cond_syscall(sys32_quotactl);
 cond_syscall(sys_acct);
@@ -46,7 +45,9 @@ cond_syscall(sys_getsockopt);
 cond_syscall(compat_sys_getsockopt);
 cond_syscall(sys_shutdown);
 cond_syscall(sys_sendmsg);
+cond_syscall(sys_sendmmsg);
 cond_syscall(compat_sys_sendmsg);
+cond_syscall(compat_sys_sendmmsg);
 cond_syscall(sys_recvmsg);
 cond_syscall(sys_recvmmsg);
 cond_syscall(compat_sys_recvmsg);
@@ -69,15 +70,22 @@ cond_syscall(compat_sys_epoll_pwait);
 cond_syscall(sys_semget);
 cond_syscall(sys_semop);
 cond_syscall(sys_semtimedop);
+cond_syscall(compat_sys_semtimedop);
 cond_syscall(sys_semctl);
+cond_syscall(compat_sys_semctl);
 cond_syscall(sys_msgget);
 cond_syscall(sys_msgsnd);
+cond_syscall(compat_sys_msgsnd);
 cond_syscall(sys_msgrcv);
+cond_syscall(compat_sys_msgrcv);
 cond_syscall(sys_msgctl);
+cond_syscall(compat_sys_msgctl);
 cond_syscall(sys_shmget);
 cond_syscall(sys_shmat);
+cond_syscall(compat_sys_shmat);
 cond_syscall(sys_shmdt);
 cond_syscall(sys_shmctl);
+cond_syscall(compat_sys_shmctl);
 cond_syscall(sys_mq_open);
 cond_syscall(sys_mq_unlink);
 cond_syscall(sys_mq_timedsend);
@@ -137,6 +145,10 @@ cond_syscall(sys_io_submit);
 cond_syscall(sys_io_cancel);
 cond_syscall(sys_io_getevents);
 cond_syscall(sys_syslog);
+cond_syscall(sys_process_vm_readv);
+cond_syscall(sys_process_vm_writev);
+cond_syscall(compat_sys_process_vm_readv);
+cond_syscall(compat_sys_process_vm_writev);
 
 /* arch-specific weak syscall entries */
 cond_syscall(sys_pciconfig_read);
@@ -191,3 +203,6 @@ cond_syscall(sys_fanotify_mark);
 cond_syscall(sys_name_to_handle_at);
 cond_syscall(sys_open_by_handle_at);
 cond_syscall(compat_sys_open_by_handle_at);
+
+/* compare kernel pointers */
+cond_syscall(sys_kcmp);

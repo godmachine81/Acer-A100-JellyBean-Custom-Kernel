@@ -1,24 +1,20 @@
 /*
- * A iio driver for the light sensor ISL 29028.
+ * IIO driver for the light sensor ISL29028.
+ * ISL29028 is Concurrent Ambient Light and Proximity Sensor
  *
- * IIO Light driver for monitoring ambient light intensity in lux and proximity
- * ir.
+ * Copyright (c) 2012, NVIDIA CORPORATION.  All rights reserved.
  *
- * Copyright (c) 2011, NVIDIA Corporation.
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
+ * This program is distributed in the hope it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA	02110-1301, USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/module.h>
@@ -27,1209 +23,515 @@
 #include <linux/mutex.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
-#include <linux/completion.h>
-#include <linux/interrupt.h>
-#include "../iio.h"
+#include <linux/regmap.h>
+#include <linux/iio/iio.h>
+#include <linux/iio/sysfs.h>
 
 #define CONVERSION_TIME_MS		100
 
-#define ISL29028_REG_ADD_CONFIGURE	0x01
+#define ISL29028_REG_CONFIGURE		0x01
 
-#define CONFIGURE_PROX_EN_MASK		(1 << 7)
-#define CONFIGURE_PROX_EN_SH		7
+#define CONFIGURE_ALS_IR_MODE_ALS	0
+#define CONFIGURE_ALS_IR_MODE_IR	BIT(0)
+#define CONFIGURE_ALS_IR_MODE_MASK	BIT(0)
+
+#define CONFIGURE_ALS_RANGE_LOW_LUX	0
+#define CONFIGURE_ALS_RANGE_HIGH_LUX	BIT(1)
+#define CONFIGURE_ALS_RANGE_MASK	BIT(1)
+
+#define CONFIGURE_ALS_DIS		0
+#define CONFIGURE_ALS_EN		BIT(2)
+#define CONFIGURE_ALS_EN_MASK		BIT(2)
+
+#define CONFIGURE_PROX_DRIVE		BIT(3)
 
 #define CONFIGURE_PROX_SLP_SH		4
 #define CONFIGURE_PROX_SLP_MASK		(7 << CONFIGURE_PROX_SLP_SH)
 
-#define CONFIGURE_PROX_DRIVE		(1 << 3)
+#define CONFIGURE_PROX_EN		BIT(7)
+#define CONFIGURE_PROX_EN_MASK		BIT(7)
 
-#define CONFIGURE_ALS_EN		1
-#define CONFIGURE_ALS_DIS		0
-#define CONFIGURE_ALS_EN_SH		2
-#define CONFIGURE_ALS_EN_MASK		(1 << CONFIGURE_ALS_EN_SH)
+#define ISL29028_REG_INTERRUPT		0x02
 
+#define ISL29028_REG_PROX_DATA		0x08
+#define ISL29028_REG_ALSIR_L		0x09
+#define ISL29028_REG_ALSIR_U		0x0A
 
-#define CONFIGURE_ALS_RANGE_LOW_LUX	0
-#define CONFIGURE_ALS_RANGE_HIGH_LUX	1
-#define CONFIGURE_ALS_RANGE_SH		1
-#define CONFIGURE_ALS_RANGE_MASK	(1 << CONFIGURE_ALS_RANGE_SH)
+#define ISL29028_REG_TEST1_MODE		0x0E
+#define ISL29028_REG_TEST2_MODE		0x0F
 
-#define CONFIGURE_ALS_IR_MODE_MASK	1
-#define CONFIGURE_ALS_IR_MODE_SH	0
-#define CONFIGURE_ALS_IR_MODE_IR	1
-#define CONFIGURE_ALS_IR_MODE_ALS	0
+#define ISL29028_NUM_REGS		(ISL29028_REG_TEST2_MODE + 1)
 
-#define ISL29028_REG_ADD_INTERRUPT	0x02
-#define INTERRUPT_PROX_FLAG_MASK	(1 << 7)
-#define INTERRUPT_PROX_FLAG_SH		7
-#define INTERRUPT_PROX_FLAG_EN		1
-#define INTERRUPT_PROX_FLAG_DIS		0
-
-#define INTERRUPT_PROX_PERSIST_SH	5
-#define INTERRUPT_PROX_PERSIST_MASK	(3 << 5)
-
-#define INTERRUPT_ALS_FLAG_MASK		(1 << 3)
-#define INTERRUPT_ALS_FLAG_SH		3
-#define INTERRUPT_ALS_FLAG_EN		1
-#define INTERRUPT_ALS_FLAG_DIS		0
-
-#define INTERRUPT_ALS_PERSIST_SH	1
-#define INTERRUPT_ALS_PERSIST_MASK	(3 << 1)
-
-#define ISL29028_REG_ADD_PROX_LOW_THRES		0x03
-#define ISL29028_REG_ADD_PROX_HIGH_THRES	0x04
-
-#define ISL29028_REG_ADD_ALSIR_LOW_THRES	0x05
-#define ISL29028_REG_ADD_ALSIR_LH_THRES		0x06
-#define ISL29028_REG_ADD_ALSIR_LH_THRES_L_SH	0
-#define ISL29028_REG_ADD_ALSIR_LH_THRES_H_SH	4
-#define ISL29028_REG_ADD_ALSIR_HIGH_THRES	0x07
-
-#define ISL29028_REG_ADD_PROX_DATA		0x08
-#define ISL29028_REG_ADD_ALSIR_L		0x09
-#define ISL29028_REG_ADD_ALSIR_U		0x0A
-
-#define ISL29028_REG_ADD_TEST1_MODE		0x0E
-#define ISL29028_REG_ADD_TEST2_MODE		0x0F
-
-#define ISL29028_MAX_REGS		ISL29028_REG_ADD_TEST2_MODE
-
-enum {
+enum als_ir_mode {
 	MODE_NONE = 0,
 	MODE_ALS,
 	MODE_IR
 };
 
 struct isl29028_chip {
-	struct iio_dev		*indio_dev;
-	struct i2c_client	*client;
+	struct device		*dev;
 	struct mutex		lock;
-	int			irq;
+	struct regmap		*regmap;
 
-	int			prox_period;
-	int			prox_low_thres;
-	int			prox_high_thres;
-	int			prox_persist;
-	bool			is_prox_enable;
-	int			prox_reading;
+	unsigned int		prox_sampling;
+	bool			enable_prox;
 
-	int			als_high_thres;
-	int			als_low_thres;
-	int			als_persist;
-	int			als_range;
-	int			als_reading;
+	int			lux_scale;
 	int			als_ir_mode;
-
-	int			ir_high_thres;
-	int			ir_low_thres;
-	int			ir_reading;
-
-	bool			is_int_enable;
-	bool			is_proxim_int_waiting;
-	bool			is_als_int_waiting;
-	struct completion	prox_completion;
-	struct completion	als_completion;
-	u8			reg_cache[ISL29028_MAX_REGS];
 };
 
-static bool isl29028_write_data(struct i2c_client *client, u8 reg,
-	u8 val, u8 mask, u8 shift)
+static int isl29028_set_proxim_sampling(struct isl29028_chip *chip,
+			unsigned int sampling)
 {
-	u8 regval;
+	static unsigned int prox_period[] = {800, 400, 200, 100, 75, 50, 12, 0};
+	int sel;
+	unsigned int period = DIV_ROUND_UP(1000, sampling);
+
+	for (sel = 0; sel < ARRAY_SIZE(prox_period); ++sel) {
+		if (period >= prox_period[sel])
+			break;
+	}
+	return regmap_update_bits(chip->regmap, ISL29028_REG_CONFIGURE,
+			CONFIGURE_PROX_SLP_MASK, sel << CONFIGURE_PROX_SLP_SH);
+}
+
+static int isl29028_enable_proximity(struct isl29028_chip *chip, bool enable)
+{
+	int ret;
+	int val = 0;
+
+	if (enable)
+		val = CONFIGURE_PROX_EN;
+	ret = regmap_update_bits(chip->regmap, ISL29028_REG_CONFIGURE,
+			CONFIGURE_PROX_EN_MASK, val);
+	if (ret < 0)
+		return ret;
+
+	/* Wait for conversion to be complete for first sample */
+	mdelay(DIV_ROUND_UP(1000, chip->prox_sampling));
+	return 0;
+}
+
+static int isl29028_set_als_scale(struct isl29028_chip *chip, int lux_scale)
+{
+	int val = (lux_scale == 2000) ? CONFIGURE_ALS_RANGE_HIGH_LUX :
+					CONFIGURE_ALS_RANGE_LOW_LUX;
+
+	return regmap_update_bits(chip->regmap, ISL29028_REG_CONFIGURE,
+		CONFIGURE_ALS_RANGE_MASK, val);
+}
+
+static int isl29028_set_als_ir_mode(struct isl29028_chip *chip,
+	enum als_ir_mode mode)
+{
 	int ret = 0;
-	struct isl29028_chip *chip = i2c_get_clientdata(client);
 
-	regval = chip->reg_cache[reg];
-	regval &= ~mask;
-	regval |= val << shift;
+	switch (mode) {
+	case MODE_ALS:
+		ret = regmap_update_bits(chip->regmap, ISL29028_REG_CONFIGURE,
+			CONFIGURE_ALS_IR_MODE_MASK, CONFIGURE_ALS_IR_MODE_ALS);
+		if (ret < 0)
+			return ret;
 
-	ret = i2c_smbus_write_byte_data(client, reg, regval);
-	if (ret) {
-		dev_err(&client->dev, "Write to device reg %d fails status "
-				"%x\n", reg, ret);
-		return false;
+		ret = regmap_update_bits(chip->regmap, ISL29028_REG_CONFIGURE,
+			CONFIGURE_ALS_RANGE_MASK, CONFIGURE_ALS_RANGE_HIGH_LUX);
+		break;
+
+	case MODE_IR:
+		ret = regmap_update_bits(chip->regmap, ISL29028_REG_CONFIGURE,
+			CONFIGURE_ALS_IR_MODE_MASK, CONFIGURE_ALS_IR_MODE_IR);
+		break;
+
+	case MODE_NONE:
+		return regmap_update_bits(chip->regmap, ISL29028_REG_CONFIGURE,
+			CONFIGURE_ALS_EN_MASK, CONFIGURE_ALS_DIS);
 	}
-	chip->reg_cache[reg] = regval;
-	return true;
+
+	if (ret < 0)
+		return ret;
+
+	/* Enable the ALS/IR */
+	ret = regmap_update_bits(chip->regmap, ISL29028_REG_CONFIGURE,
+			CONFIGURE_ALS_EN_MASK, CONFIGURE_ALS_EN);
+	if (ret < 0)
+		return ret;
+
+	/* Need to wait for conversion time if ALS/IR mode enabled */
+	mdelay(CONVERSION_TIME_MS);
+	return 0;
 }
 
-static bool isl29018_set_proxim_period(struct i2c_client *client,
-		bool is_enable,	int period)
+static int isl29028_read_als_ir(struct isl29028_chip *chip, int *als_ir)
 {
-	int prox_period[] = {0, 12, 50, 75, 100, 200, 400, 800};
-	int i;
-	int sel;
-	bool st;
-	if (period < 12)
-		sel = 7;
-	else {
-		for (i = 1; i < ARRAY_SIZE(prox_period) - 1; ++i) {
-			if ((prox_period[i] <= period) &&
-						period < prox_period[i + 1])
-				break;
-		}
-		sel = 7 - i;
+	unsigned int lsb;
+	unsigned int msb;
+	int ret;
+
+	ret = regmap_read(chip->regmap, ISL29028_REG_ALSIR_L, &lsb);
+	if (ret < 0) {
+		dev_err(chip->dev,
+			"Error in reading register ALSIR_L err %d\n", ret);
+		return ret;
 	}
 
-	if (!is_enable) {
-		dev_dbg(&client->dev, "Disabling proximity sensing\n");
-		st = isl29028_write_data(client, ISL29028_REG_ADD_CONFIGURE,
-			0, CONFIGURE_PROX_EN_MASK, CONFIGURE_PROX_EN_SH);
-	} else {
-		dev_dbg(&client->dev, "Enabling proximity sensing with period "
-			"of %d ms sel %d period %d\n", prox_period[7 - sel],
-			sel, period);
-		st = isl29028_write_data(client, ISL29028_REG_ADD_CONFIGURE,
-			sel, CONFIGURE_PROX_SLP_MASK, CONFIGURE_PROX_SLP_SH);
-		if (st)
-			st = isl29028_write_data(client,
-				ISL29028_REG_ADD_CONFIGURE, 1,
-				CONFIGURE_PROX_EN_MASK, CONFIGURE_PROX_EN_SH);
-	}
-	return st;
-}
-
-static bool isl29018_set_proxim_persist(struct i2c_client *client,
-		bool is_enable,	int persist)
-{
-	int prox_perstant[] = {1, 4, 8, 16};
-	int i;
-	int sel;
-	bool st;
-	if (is_enable) {
-		for (i = 0; i < ARRAY_SIZE(prox_perstant) - 1; ++i) {
-			if ((prox_perstant[i] <= persist) &&
-						persist < prox_perstant[i+1])
-				break;
-		}
-		sel = i;
+	ret = regmap_read(chip->regmap, ISL29028_REG_ALSIR_U, &msb);
+	if (ret < 0) {
+		dev_err(chip->dev,
+			"Error in reading register ALSIR_U err %d\n", ret);
+		return ret;
 	}
 
-	if (is_enable) {
-		dev_dbg(&client->dev, "Enabling proximity threshold interrupt\n");
-		st = isl29028_write_data(client, ISL29028_REG_ADD_INTERRUPT,
-			sel, INTERRUPT_PROX_PERSIST_MASK,
-			INTERRUPT_PROX_PERSIST_SH);
-		if (st)
-			st = isl29028_write_data(client,
-				ISL29028_REG_ADD_INTERRUPT,
-				INTERRUPT_PROX_FLAG_EN,
-				INTERRUPT_PROX_FLAG_MASK,
-				INTERRUPT_PROX_FLAG_SH);
-	} else {
-		st = isl29028_write_data(client,
-			ISL29028_REG_ADD_INTERRUPT, INTERRUPT_PROX_FLAG_DIS,
-			INTERRUPT_PROX_FLAG_MASK, INTERRUPT_PROX_FLAG_SH);
-	}
-	return st;
-}
-
-static bool isl29018_set_als_persist(struct i2c_client *client, bool is_enable,
-			int persist)
-{
-	int prox_perstant[] = {1, 4, 8, 16};
-	int i;
-	int sel;
-	bool st;
-	if (is_enable) {
-		for (i = 0; i < ARRAY_SIZE(prox_perstant) - 1; ++i) {
-			if ((prox_perstant[i] <= persist) &&
-						persist < prox_perstant[i+1])
-				break;
-		}
-		sel = i;
-	}
-
-	if (is_enable) {
-		dev_dbg(&client->dev, "Enabling als threshold interrupt\n");
-		st = isl29028_write_data(client, ISL29028_REG_ADD_INTERRUPT,
-			sel, INTERRUPT_ALS_PERSIST_MASK,
-			INTERRUPT_ALS_PERSIST_SH);
-		if (st)
-			st = isl29028_write_data(client,
-				ISL29028_REG_ADD_INTERRUPT,
-				INTERRUPT_ALS_FLAG_EN,
-				INTERRUPT_ALS_FLAG_MASK,
-				INTERRUPT_ALS_FLAG_SH);
-	} else {
-		st = isl29028_write_data(client,
-			ISL29028_REG_ADD_INTERRUPT, INTERRUPT_ALS_FLAG_DIS,
-			INTERRUPT_ALS_FLAG_MASK, INTERRUPT_ALS_FLAG_SH);
-	}
-	return st;
-}
-
-static bool isl29018_set_proxim_high_threshold(struct i2c_client *client, u8 th)
-{
-	return isl29028_write_data(client, ISL29028_REG_ADD_PROX_HIGH_THRES,
-		th, 0xFF, 0);
-}
-
-static bool isl29018_set_proxim_low_threshold(struct i2c_client *client, u8 th)
-{
-	return isl29028_write_data(client, ISL29028_REG_ADD_PROX_LOW_THRES,
-		th, 0xFF, 0);
-}
-
-static bool isl29018_set_irals_high_threshold(struct i2c_client *client,
-				u32 als)
-{
-	bool st;
-	st = isl29028_write_data(client, ISL29028_REG_ADD_ALSIR_HIGH_THRES,
-		(als >> 4) & 0xFF, 0xFF, 0);
-	if (st)
-		st = isl29028_write_data(client,
-			ISL29028_REG_ADD_ALSIR_LH_THRES, als & 0xF,
-			0xF << ISL29028_REG_ADD_ALSIR_LH_THRES_H_SH,
-			ISL29028_REG_ADD_ALSIR_LH_THRES_H_SH);
-	return st;
-}
-
-static bool isl29018_set_irals_low_threshold(struct i2c_client *client, u32 als)
-{
-	bool st;
-	st = isl29028_write_data(client,
-		ISL29028_REG_ADD_ALSIR_LH_THRES, (als >> 8) & 0xF,
-		0xF << ISL29028_REG_ADD_ALSIR_LH_THRES_L_SH,
-		ISL29028_REG_ADD_ALSIR_LH_THRES_L_SH);
-	if (st)
-		st = isl29028_write_data(client,
-			ISL29028_REG_ADD_ALSIR_LOW_THRES,
-			als & 0xFF, 0xFF, 0);
-	return st;
-}
-
-static bool isl29018_set_als_ir_mode(struct i2c_client *client, bool is_enable,
-	bool is_als)
-{
-	struct isl29028_chip *chip = i2c_get_clientdata(client);
-	bool st;
-	if (is_enable) {
-		if (is_als) {
-			dev_dbg(&client->dev, "Enabling ALS mode\n");
-			st = isl29028_write_data(client,
-				ISL29028_REG_ADD_CONFIGURE,
-				CONFIGURE_ALS_IR_MODE_ALS,
-				CONFIGURE_ALS_IR_MODE_MASK,
-				CONFIGURE_ALS_IR_MODE_SH);
-			if (st)
-				st = isl29028_write_data(client,
-					ISL29028_REG_ADD_CONFIGURE,
-					CONFIGURE_ALS_RANGE_HIGH_LUX,
-					CONFIGURE_ALS_RANGE_MASK,
-					CONFIGURE_ALS_RANGE_SH);
-			if (st)
-				st = isl29018_set_irals_high_threshold(client,
-					chip->als_high_thres);
-			if (st)
-				st = isl29018_set_irals_low_threshold(client,
-					chip->als_low_thres);
-		} else {
-			dev_dbg(&client->dev, "Enabling IR mode\n");
-			st = isl29028_write_data(client,
-				ISL29028_REG_ADD_CONFIGURE,
-				CONFIGURE_ALS_IR_MODE_IR,
-				CONFIGURE_ALS_IR_MODE_MASK,
-				CONFIGURE_ALS_IR_MODE_SH);
-			if (st)
-				st = isl29018_set_irals_high_threshold(client,
-					chip->ir_high_thres);
-			if (st)
-				st = isl29018_set_irals_low_threshold(client,
-					chip->ir_low_thres);
-		}
-		if (st)
-			st = isl29028_write_data(client,
-				ISL29028_REG_ADD_CONFIGURE,
-				CONFIGURE_ALS_EN,
-				CONFIGURE_ALS_EN_MASK,
-				CONFIGURE_ALS_EN_SH);
-	} else {
-		st = isl29028_write_data(client,
-			ISL29028_REG_ADD_CONFIGURE,
-			CONFIGURE_ALS_DIS,
-			CONFIGURE_ALS_EN_MASK,
-			CONFIGURE_ALS_EN_SH);
-	}
-	return st;
-}
-
-static bool isl29028_read_als_ir(struct i2c_client *client, int *als_ir)
-{
-	s32 lsb;
-	s32 msb;
-
-	lsb = i2c_smbus_read_byte_data(client, ISL29028_REG_ADD_ALSIR_L);
-	if (lsb < 0) {
-		dev_err(&client->dev, "Error in reading register %d, error %d\n",
-				ISL29028_REG_ADD_ALSIR_L, lsb);
-		return false;
-	}
-
-	msb = i2c_smbus_read_byte_data(client, ISL29028_REG_ADD_ALSIR_U);
-	if (msb < 0) {
-		dev_err(&client->dev, "Error in reading register %d, error %d\n",
-				ISL29028_REG_ADD_ALSIR_U, lsb);
-		return false;
-	}
 	*als_ir = ((msb & 0xF) << 8) | (lsb & 0xFF);
-	return true;
+	return 0;
 }
 
-static bool isl29028_read_proxim(struct i2c_client *client, int *prox)
+static int isl29028_read_proxim(struct isl29028_chip *chip, int *prox)
 {
-	s32 data;
+	unsigned int data;
+	int ret;
 
-	data = i2c_smbus_read_byte_data(client, ISL29028_REG_ADD_PROX_DATA);
-	if (data < 0) {
-		dev_err(&client->dev, "Error in reading register %d, error %d\n",
-				ISL29028_REG_ADD_PROX_DATA, data);
-		return false;
+	ret = regmap_read(chip->regmap, ISL29028_REG_PROX_DATA, &data);
+	if (ret < 0) {
+		dev_err(chip->dev, "Error in reading register %d, error %d\n",
+				ISL29028_REG_PROX_DATA, ret);
+		return ret;
 	}
-	*prox = (int)data;
-	return true;
+	*prox = data;
+	return 0;
 }
 
-/* Sysfs interface */
-/* proximity period  */
-static ssize_t show_prox_period(struct device *dev,
-	struct device_attribute *attr, char *buf)
+static int isl29028_proxim_get(struct isl29028_chip *chip, int *prox_data)
 {
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
+	int ret;
 
-	dev_vdbg(dev, "%s()\n", __func__);
-	return sprintf(buf, "%d\n", chip->prox_period);
-}
-
-static ssize_t store_prox_period(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	struct i2c_client *client = chip->client;
-	bool st;
-	unsigned long lval;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-
-	if (strict_strtoul(buf, 10, &lval))
-		return -EINVAL;
-
-	mutex_lock(&chip->lock);
-	st = isl29018_set_proxim_period(client, chip->is_prox_enable,
-				(int)lval);
-	if (st)
-		chip->prox_period = (int)lval;
-	else
-		dev_err(dev, "Error in setting the proximity period\n");
-
-	mutex_unlock(&chip->lock);
-	return count;
-}
-
-/* proximity enable/disable  */
-static ssize_t show_prox_enable(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	if (chip->is_prox_enable)
-		return sprintf(buf, "1\n");
-	else
-		return sprintf(buf, "0\n");
-}
-
-static ssize_t store_prox_enable(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	struct i2c_client *client = chip->client;
-	bool st;
-	unsigned long lval;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-
-	if (strict_strtoul(buf, 10, &lval))
-		return -EINVAL;
-	if ((lval != 1) && (lval != 0)) {
-		dev_err(dev, "illegal value %lu\n", lval);
-		return -EINVAL;
+	if (!chip->enable_prox) {
+		ret = isl29028_enable_proximity(chip, true);
+		if (ret < 0)
+			return ret;
+		chip->enable_prox = true;
 	}
-
-	mutex_lock(&chip->lock);
-	if (lval == 1)
-		st = isl29018_set_proxim_period(client, true,
-							chip->prox_period);
-	else
-		st = isl29018_set_proxim_period(client, false,
-							chip->prox_period);
-	if (st)
-		chip->is_prox_enable = (lval) ? true : false;
-	else
-		dev_err(dev, "Error in enabling proximity\n");
-
-	mutex_unlock(&chip->lock);
-	return count;
+	return isl29028_read_proxim(chip, prox_data);
 }
 
-/* als/ir enable/disable  */
-static ssize_t show_als_ir_mode(struct device *dev,
-	struct device_attribute *attr, char *buf)
+static int isl29028_als_get(struct isl29028_chip *chip, int *als_data)
 {
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	return sprintf(buf, "Current Mode: %d [0:None, 1:ALS, 2:IR]\n",
-			chip->als_ir_mode);
-}
-
-static ssize_t store_als_ir_mode(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	struct i2c_client *client = chip->client;
-	bool st;
-	unsigned long lval;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-
-	if (strict_strtoul(buf, 10, &lval))
-		return -EINVAL;
-	if (lval > 2) {
-		dev_err(dev, "illegal value %lu\n", lval);
-		return -EINVAL;
-	}
-
-	mutex_lock(&chip->lock);
-	if (lval == 0)
-		st = isl29018_set_als_ir_mode(client, false, false);
-	else if (lval == 1)
-		st = isl29018_set_als_ir_mode(client, true, true);
-	else
-		st = isl29018_set_als_ir_mode(client, true, false);
-	if (st)
-		chip->als_ir_mode = (int)lval;
-	else
-		dev_err(dev, "Error in enabling als/ir mode\n");
-
-	mutex_unlock(&chip->lock);
-	return count;
-}
-
-/* Proximity low thresholds  */
-static ssize_t show_proxim_low_threshold(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	return sprintf(buf, "%d\n", chip->prox_low_thres);
-}
-
-static ssize_t store_proxim_low_threshold(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	struct i2c_client *client = chip->client;
-	bool st;
-	unsigned long lval;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-
-	if (strict_strtoul(buf, 10, &lval))
-		return -EINVAL;
-
-	if ((lval > 0xFF) || (lval < 0x0)) {
-		dev_err(dev, "The threshold is not supported\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&chip->lock);
-	st = isl29018_set_proxim_low_threshold(client, (u8)lval);
-	if (st)
-		chip->prox_low_thres = (int)lval;
-	else
-		dev_err(dev, "Error in setting proximity low threshold\n");
-
-	mutex_unlock(&chip->lock);
-	return count;
-}
-
-/* Proximity high thresholds  */
-static ssize_t show_proxim_high_threshold(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	return sprintf(buf, "%d\n", chip->prox_high_thres);
-}
-
-static ssize_t store_proxim_high_threshold(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	struct i2c_client *client = chip->client;
-	bool st;
-	unsigned long lval;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-
-	if (strict_strtoul(buf, 10, &lval))
-		return -EINVAL;
-
-	if ((lval > 0xFF) || (lval < 0x0)) {
-		dev_err(dev, "The threshold is not supported\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&chip->lock);
-	st = isl29018_set_proxim_high_threshold(client, (u8)lval);
-	if (st)
-		chip->prox_high_thres = (int)lval;
-	else
-		dev_err(dev, "Error in setting proximity high threshold\n");
-
-	mutex_unlock(&chip->lock);
-	return count;
-}
-
-/* als low thresholds  */
-static ssize_t show_als_low_threshold(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	return sprintf(buf, "%d\n", chip->als_low_thres);
-}
-
-static ssize_t store_als_low_threshold(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	struct i2c_client *client = chip->client;
-	bool st;
-	unsigned long lval;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-
-	if (strict_strtoul(buf, 10, &lval))
-		return -EINVAL;
-
-	if ((lval > 0xFFFF) || (lval < 0x0)) {
-		dev_err(dev, "The ALS threshold is not supported\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&chip->lock);
-	if (chip->als_ir_mode == MODE_ALS) {
-		st = isl29018_set_irals_low_threshold(client, (int)lval);
-		if (st)
-			chip->als_low_thres = (int)lval;
-		else
-			dev_err(dev, "Error in setting als low threshold\n");
-	} else
-		chip->als_low_thres = (int)lval;
-	mutex_unlock(&chip->lock);
-	return count;
-}
-
-/* Als high thresholds  */
-static ssize_t show_als_high_threshold(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	return sprintf(buf, "%d\n", chip->als_high_thres);
-}
-
-static ssize_t store_als_high_threshold(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	struct i2c_client *client = chip->client;
-	bool st;
-	unsigned long lval;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-
-	if (strict_strtoul(buf, 10, &lval))
-		return -EINVAL;
-
-	if ((lval > 0xFFFF) || (lval < 0x0)) {
-		dev_err(dev, "The als threshold is not supported\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&chip->lock);
-	if (chip->als_ir_mode == MODE_ALS) {
-		st = isl29018_set_irals_high_threshold(client, (int)lval);
-		if (st)
-			chip->als_high_thres = (int)lval;
-		else
-			dev_err(dev, "Error in setting als high threshold\n");
-	} else
-		chip->als_high_thres = (int)lval;
-	mutex_unlock(&chip->lock);
-	return count;
-}
-
-/* IR low thresholds  */
-static ssize_t show_ir_low_threshold(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	return sprintf(buf, "%d\n", chip->ir_low_thres);
-}
-
-static ssize_t store_ir_low_threshold(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	struct i2c_client *client = chip->client;
-	bool st;
-	unsigned long lval;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-
-	if (strict_strtoul(buf, 10, &lval))
-		return -EINVAL;
-
-	if ((lval > 0xFFFF) || (lval < 0x0)) {
-		dev_err(dev, "The IR threshold is not supported\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&chip->lock);
-	if (chip->als_ir_mode == MODE_IR) {
-		st = isl29018_set_irals_low_threshold(client, (int)lval);
-		if (st)
-			chip->ir_low_thres = (int)lval;
-		else
-			dev_err(dev, "Error in setting als low threshold\n");
-	} else
-		chip->ir_low_thres = (int)lval;
-	mutex_unlock(&chip->lock);
-	return count;
-}
-
-/* IR high thresholds  */
-static ssize_t show_ir_high_threshold(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	return sprintf(buf, "%d\n", chip->ir_high_thres);
-}
-
-static ssize_t store_ir_high_threshold(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	struct i2c_client *client = chip->client;
-	bool st;
-	unsigned long lval;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-
-	if (strict_strtoul(buf, 10, &lval))
-		return -EINVAL;
-
-	if ((lval > 0xFFFF) || (lval < 0x0)) {
-		dev_err(dev, "The als threshold is not supported\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&chip->lock);
-	if (chip->als_ir_mode == MODE_IR) {
-		st = isl29018_set_irals_high_threshold(client, (int)lval);
-		if (st)
-			chip->ir_high_thres = (int)lval;
-		else
-			dev_err(dev, "Error in setting als high threshold\n");
-	} else
-		chip->ir_high_thres = (int)lval;
-	mutex_unlock(&chip->lock);
-	return count;
-}
-
-/* Proximity persist  */
-static ssize_t show_proxim_persist(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	return sprintf(buf, "%d\n", chip->prox_persist);
-}
-
-static ssize_t store_proxim_persist(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	unsigned long lval;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-
-	if (strict_strtoul(buf, 10, &lval))
-		return -EINVAL;
-
-	if ((lval > 16) || (lval < 0x0)) {
-		dev_err(dev, "The proximity persist is not supported\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&chip->lock);
-	chip->prox_persist = (int)lval;
-	mutex_unlock(&chip->lock);
-	return count;
-}
-
-/* als/ir persist  */
-static ssize_t show_als_persist(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	return sprintf(buf, "%d\n", chip->als_persist);
-}
-
-static ssize_t store_als_persist(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	unsigned long lval;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-
-	if (strict_strtoul(buf, 10, &lval))
-		return -EINVAL;
-
-	if ((lval > 16) || (lval < 0x0)) {
-		dev_err(dev, "The als persist is not supported\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&chip->lock);
-	chip->als_persist = (int)lval;
-	mutex_unlock(&chip->lock);
-	return count;
-}
-
-/* Display proxim data  */
-static ssize_t show_proxim_data(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	int prox_data;
-	bool st;
-	ssize_t buf_count = 0;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	mutex_lock(&chip->lock);
-
-	if (chip->is_prox_enable) {
-		st = isl29028_read_proxim(chip->client, &prox_data);
-		if (st) {
-			buf_count = sprintf(buf, "%d\n", prox_data);
-			chip->prox_reading = prox_data;
-		}
-	} else
-		buf_count = sprintf(buf, "%d\n", chip->prox_reading);
-
-	mutex_unlock(&chip->lock);
-	return buf_count;
-}
-
-/* Display als data  */
-static ssize_t show_als_data(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
+	int ret;
 	int als_ir_data;
-	bool st;
-	ssize_t buf_count = 0;
 
-	dev_vdbg(dev, "%s()\n", __func__);
-	mutex_lock(&chip->lock);
-
-	if (chip->als_ir_mode == MODE_ALS) {
-		st = isl29028_read_als_ir(chip->client, &als_ir_data);
-		if (st) {
-			/* convert als data count to lux */
-			/* if als_range = 0, lux = count * 0.0326 */
-			/* if als_range = 1, lux = count * 0.522 */
-			if (!chip->als_range)
-				als_ir_data = (als_ir_data * 326) / 10000;
-			else
-				als_ir_data = (als_ir_data * 522) / 1000;
-
-			buf_count = sprintf(buf, "%d\n", als_ir_data);
-			chip->als_reading = als_ir_data;
+	if (chip->als_ir_mode != MODE_ALS) {
+		ret = isl29028_set_als_ir_mode(chip, MODE_ALS);
+		if (ret < 0) {
+			dev_err(chip->dev,
+				"Error in enabling ALS mode err %d\n", ret);
+			return ret;
 		}
-	} else
-		buf_count = sprintf(buf, "%d\n", chip->als_reading);
-	mutex_unlock(&chip->lock);
-	return buf_count;
+		chip->als_ir_mode = MODE_ALS;
+	}
+
+	ret = isl29028_read_als_ir(chip, &als_ir_data);
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * convert als data count to lux.
+	 * if lux_scale = 125,  lux = count * 0.031
+	 * if lux_scale = 2000, lux = count * 0.49
+	 */
+	if (chip->lux_scale == 125)
+		als_ir_data = (als_ir_data * 31) / 1000;
+	else
+		als_ir_data = (als_ir_data * 49) / 100;
+
+	*als_data = als_ir_data;
+	return 0;
 }
 
-/* Display IR data  */
-static ssize_t show_ir_data(struct device *dev,
-	struct device_attribute *attr, char *buf)
+static int isl29028_ir_get(struct isl29028_chip *chip, int *ir_data)
 {
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	int als_ir_data;
-	bool st;
-	ssize_t buf_count = 0;
+	int ret;
 
-	dev_vdbg(dev, "%s()\n", __func__);
-	mutex_lock(&chip->lock);
-
-	if (chip->als_ir_mode == MODE_IR) {
-		st = isl29028_read_als_ir(chip->client, &als_ir_data);
-		if (st) {
-			buf_count = sprintf(buf, "%d\n", als_ir_data);
-			chip->ir_reading = als_ir_data;
+	if (chip->als_ir_mode != MODE_IR) {
+		ret = isl29028_set_als_ir_mode(chip, MODE_IR);
+		if (ret < 0) {
+			dev_err(chip->dev,
+				"Error in enabling IR mode err %d\n", ret);
+			return ret;
 		}
-	} else
-		buf_count = sprintf(buf, "%d\n", chip->ir_reading);
-	mutex_unlock(&chip->lock);
-	return buf_count;
+		chip->als_ir_mode = MODE_IR;
+	}
+	return isl29028_read_als_ir(chip, ir_data);
 }
 
-/* Wait for the proximity threshold interrupt*/
-static ssize_t show_wait_proxim_int(struct device *dev,
-	struct device_attribute *attr, char *buf)
+/* Channel IO */
+static int isl29028_write_raw(struct iio_dev *indio_dev,
+	     struct iio_chan_spec const *chan, int val, int val2, long mask)
 {
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	struct i2c_client *client = chip->client;
-	bool st;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	if (!chip->is_int_enable) {
-		dev_err(dev, "%s() Interrupt mode not supported\n", __func__);
-		return sprintf(buf, "error\n");
-	}
+	struct isl29028_chip *chip = iio_priv(indio_dev);
+	int ret = -EINVAL;
 
 	mutex_lock(&chip->lock);
-	st = isl29018_set_proxim_persist(client, true, chip->prox_persist);
-	if (!st) {
-		dev_err(dev, "%s() Error in configuration\n", __func__);
-		mutex_unlock(&chip->lock);
-		return sprintf(buf, "error\n");
-	}
+	switch (chan->type) {
+	case IIO_PROXIMITY:
+		if (mask != IIO_CHAN_INFO_SAMP_FREQ) {
+			dev_err(chip->dev,
+				"proximity: mask value 0x%08lx not supported\n",
+				mask);
+			break;
+		}
+		if (val < 1 || val > 100) {
+			dev_err(chip->dev,
+				"Samp_freq %d is not in range[1:100]\n", val);
+			break;
+		}
+		ret = isl29028_set_proxim_sampling(chip, val);
+		if (ret < 0) {
+			dev_err(chip->dev,
+				"Setting proximity samp_freq fail, err %d\n",
+				ret);
+			break;
+		}
+		chip->prox_sampling = val;
+		break;
 
-	chip->is_proxim_int_waiting =  true;
+	case IIO_LIGHT:
+		if (mask != IIO_CHAN_INFO_SCALE) {
+			dev_err(chip->dev,
+				"light: mask value 0x%08lx not supported\n",
+				mask);
+			break;
+		}
+		if ((val != 125) && (val != 2000)) {
+			dev_err(chip->dev,
+				"lux scale %d is invalid [125, 2000]\n", val);
+			break;
+		}
+		ret = isl29028_set_als_scale(chip, val);
+		if (ret < 0) {
+			dev_err(chip->dev,
+				"Setting lux scale fail with error %d\n", ret);
+			break;
+		}
+		chip->lux_scale = val;
+		break;
+
+	default:
+		dev_err(chip->dev, "Unsupported channel type\n");
+		break;
+	}
 	mutex_unlock(&chip->lock);
-	wait_for_completion(&chip->prox_completion);
-	mutex_lock(&chip->lock);
-	chip->is_proxim_int_waiting =  false;
-	isl29018_set_proxim_persist(client, false, chip->prox_persist);
-	mutex_unlock(&chip->lock);
-	return sprintf(buf, "done\n");
+	return ret;
 }
 
-/* Wait for the als/ir interrupt*/
-static ssize_t show_wait_als_ir_int(struct device *dev,
-	struct device_attribute *attr, char *buf)
+static int isl29028_read_raw(struct iio_dev *indio_dev,
+	     struct iio_chan_spec const *chan, int *val, int *val2, long mask)
 {
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	struct i2c_client *client = chip->client;
-	bool st;
-
-	dev_vdbg(dev, "%s()\n", __func__);
-	if (!chip->is_int_enable) {
-		dev_err(dev, "%s() Interrupt mode not supported\n", __func__);
-		return sprintf(buf, "error\n");
-	}
+	struct isl29028_chip *chip = iio_priv(indio_dev);
+	int ret = -EINVAL;
 
 	mutex_lock(&chip->lock);
+	switch (mask) {
+	case IIO_CHAN_INFO_RAW:
+	case IIO_CHAN_INFO_PROCESSED:
+		switch (chan->type) {
+		case IIO_LIGHT:
+			ret = isl29028_als_get(chip, val);
+			break;
+		case IIO_INTENSITY:
+			ret = isl29028_ir_get(chip, val);
+			break;
+		case IIO_PROXIMITY:
+			ret = isl29028_proxim_get(chip, val);
+			break;
+		default:
+			break;
+		}
+		if (ret < 0)
+			break;
+		ret = IIO_VAL_INT;
+		break;
 
-	st = isl29018_set_als_persist(client, true, chip->als_persist);
-	if (!st) {
-		dev_err(dev, "%s() Error in als ir int configuration\n",
-					 __func__);
-		mutex_unlock(&chip->lock);
-		return sprintf(buf, "error\n");
+	case IIO_CHAN_INFO_SAMP_FREQ:
+		if (chan->type != IIO_PROXIMITY)
+			break;
+		*val = chip->prox_sampling;
+		ret = IIO_VAL_INT;
+		break;
+
+	case IIO_CHAN_INFO_SCALE:
+		if (chan->type != IIO_LIGHT)
+			break;
+		*val = chip->lux_scale;
+		ret = IIO_VAL_INT;
+		break;
+
+	default:
+		dev_err(chip->dev, "mask value 0x%08lx not supported\n", mask);
+		break;
 	}
-
-	chip->is_als_int_waiting =  true;
 	mutex_unlock(&chip->lock);
-	wait_for_completion(&chip->als_completion);
-	mutex_lock(&chip->lock);
-	chip->is_als_int_waiting =  false;
-	st = isl29018_set_als_persist(client, false, chip->als_persist);
-	mutex_unlock(&chip->lock);
-	return sprintf(buf, "done\n");
+	return ret;
 }
 
-/* Read name */
-static ssize_t show_name(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct isl29028_chip *chip = indio_dev->dev_data;
-	return sprintf(buf, "%s\n", chip->client->name);
-}
+static IIO_CONST_ATTR(in_proximity_sampling_frequency_available,
+				"1, 3, 5, 10, 13, 20, 83, 100");
+static IIO_CONST_ATTR(in_illuminance_scale_available, "125, 2000");
 
-static IIO_DEVICE_ATTR(proximity_low_threshold, S_IRUGO | S_IWUSR,
-		show_proxim_low_threshold, store_proxim_low_threshold, 0);
-static IIO_DEVICE_ATTR(proximity_high_threshold, S_IRUGO | S_IWUSR,
-		show_proxim_high_threshold, store_proxim_high_threshold, 0);
-static IIO_DEVICE_ATTR(proximity_persist, S_IRUGO | S_IWUSR,
-		show_proxim_persist, store_proxim_persist, 0);
-static IIO_DEVICE_ATTR(proximity_period, S_IRUGO | S_IWUSR,
-		show_prox_period, store_prox_period, 0);
-static IIO_DEVICE_ATTR(proximity_enable, S_IRUGO | S_IWUSR,
-		show_prox_enable, store_prox_enable, 0);
-static IIO_DEVICE_ATTR(wait_proxim_thres, S_IRUGO,
-		show_wait_proxim_int, NULL, 0);
-static IIO_DEVICE_ATTR(proximity_value, S_IRUGO,
-		show_proxim_data, NULL, 0);
-
-static IIO_DEVICE_ATTR(als_low_threshold, S_IRUGO | S_IWUSR,
-		show_als_low_threshold, store_als_low_threshold, 0);
-static IIO_DEVICE_ATTR(als_high_threshold, S_IRUGO | S_IWUSR,
-		show_als_high_threshold, store_als_high_threshold, 0);
-static IIO_DEVICE_ATTR(als_persist, S_IRUGO | S_IWUSR,
-		show_als_persist, store_als_persist, 0);
-static IIO_DEVICE_ATTR(als_ir_mode, S_IRUGO | S_IWUSR,
-		show_als_ir_mode, store_als_ir_mode, 0);
-static IIO_DEVICE_ATTR(als_value, S_IRUGO,
-		show_als_data, NULL, 0);
-static IIO_DEVICE_ATTR(wait_als_ir_thres, S_IRUGO,
-		show_wait_als_ir_int, NULL, 0);
-
-static IIO_DEVICE_ATTR(ir_value, S_IRUGO,
-		show_ir_data, NULL, 0);
-static IIO_DEVICE_ATTR(ir_low_threshold, S_IRUGO | S_IWUSR,
-		show_ir_low_threshold, store_ir_low_threshold, 0);
-static IIO_DEVICE_ATTR(ir_high_threshold, S_IRUGO | S_IWUSR,
-		show_ir_high_threshold, store_ir_high_threshold, 0);
-
-static IIO_DEVICE_ATTR(name, S_IRUGO, show_name, NULL, 0);
-
+#define ISL29028_DEV_ATTR(name) (&iio_dev_attr_##name.dev_attr.attr)
+#define ISL29028_CONST_ATTR(name) (&iio_const_attr_##name.dev_attr.attr)
 static struct attribute *isl29028_attributes[] = {
-	&iio_dev_attr_name.dev_attr.attr,
-
-	&iio_dev_attr_ir_value.dev_attr.attr,
-
-	&iio_dev_attr_als_low_threshold.dev_attr.attr,
-	&iio_dev_attr_als_high_threshold.dev_attr.attr,
-	&iio_dev_attr_als_persist.dev_attr.attr,
-	&iio_dev_attr_als_ir_mode.dev_attr.attr,
-	&iio_dev_attr_als_value.dev_attr.attr,
-	&iio_dev_attr_wait_als_ir_thres.dev_attr.attr,
-	&iio_dev_attr_ir_low_threshold.dev_attr.attr,
-	&iio_dev_attr_ir_high_threshold.dev_attr.attr,
-
-	&iio_dev_attr_proximity_low_threshold.dev_attr.attr,
-	&iio_dev_attr_proximity_high_threshold.dev_attr.attr,
-	&iio_dev_attr_proximity_enable.dev_attr.attr,
-	&iio_dev_attr_proximity_period.dev_attr.attr,
-	&iio_dev_attr_proximity_persist.dev_attr.attr,
-	&iio_dev_attr_proximity_value.dev_attr.attr,
-	&iio_dev_attr_wait_proxim_thres.dev_attr.attr,
-	NULL
+	ISL29028_CONST_ATTR(in_proximity_sampling_frequency_available),
+	ISL29028_CONST_ATTR(in_illuminance_scale_available),
+	NULL,
 };
 
 static const struct attribute_group isl29108_group = {
 	.attrs = isl29028_attributes,
 };
 
-static int isl29028_chip_init(struct i2c_client *client)
-{
-	struct isl29028_chip *chip = i2c_get_clientdata(client);
-	int i;
-	bool st;
-
-	for (i = 0; i < ARRAY_SIZE(chip->reg_cache); i++)
-		chip->reg_cache[i] = 0;
-
-	chip->is_prox_enable  = 0;
-	chip->prox_low_thres = 0;
-	chip->prox_high_thres = 0xFF;
-	chip->prox_period = 0;
-	chip->prox_reading = 0;
-
-	chip->als_low_thres = 0;
-	chip->als_high_thres = 0xFFF;
-	chip->als_range = 1;
-	chip->als_reading = 0;
-	chip->als_ir_mode = 0;
-
-	chip->ir_high_thres = 0xFFF;
-	chip->ir_low_thres = 0;
-	chip->ir_reading = 0;
-
-	chip->is_int_enable = false;
-	chip->prox_persist = 1;
-	chip->als_persist = 1;
-	chip->is_proxim_int_waiting = false;
-	chip->is_als_int_waiting = false;
-
-	st = isl29028_write_data(client, ISL29028_REG_ADD_TEST1_MODE,
-					0x0, 0xFF, 0);
-	if (st)
-		st = isl29028_write_data(client, ISL29028_REG_ADD_TEST2_MODE,
-					0x0, 0xFF, 0);
-	if (st)
-		st = isl29028_write_data(client, ISL29028_REG_ADD_CONFIGURE,
-					0x0, 0xFF, 0);
-	if (st)
-		msleep(1);
-	if (!st) {
-		dev_err(&client->dev, "%s(): fails\n", __func__);
-		return -ENODEV;
+static const struct iio_chan_spec isl29028_channels[] = {
+	{
+		.type = IIO_LIGHT,
+		.info_mask = IIO_CHAN_INFO_PROCESSED_SEPARATE_BIT |
+		IIO_CHAN_INFO_SCALE_SEPARATE_BIT,
+	}, {
+		.type = IIO_INTENSITY,
+		.info_mask = IIO_CHAN_INFO_RAW_SEPARATE_BIT,
+	}, {
+		.type = IIO_PROXIMITY,
+		.info_mask = IIO_CHAN_INFO_RAW_SEPARATE_BIT |
+		IIO_CHAN_INFO_SAMP_FREQ_SEPARATE_BIT,
 	}
-	return 0;
+};
+
+static const struct iio_info isl29028_info = {
+	.attrs = &isl29108_group,
+	.driver_module = THIS_MODULE,
+	.read_raw = &isl29028_read_raw,
+	.write_raw = &isl29028_write_raw,
+};
+
+static int isl29028_chip_init(struct isl29028_chip *chip)
+{
+	int ret;
+
+	chip->enable_prox  = false;
+	chip->prox_sampling = 20;
+	chip->lux_scale = 2000;
+	chip->als_ir_mode = MODE_NONE;
+
+	ret = regmap_write(chip->regmap, ISL29028_REG_TEST1_MODE, 0x0);
+	if (ret < 0) {
+		dev_err(chip->dev, "%s(): write to reg %d failed, err = %d\n",
+			__func__, ISL29028_REG_TEST1_MODE, ret);
+		return ret;
+	}
+	ret = regmap_write(chip->regmap, ISL29028_REG_TEST2_MODE, 0x0);
+	if (ret < 0) {
+		dev_err(chip->dev, "%s(): write to reg %d failed, err = %d\n",
+			__func__, ISL29028_REG_TEST2_MODE, ret);
+		return ret;
+	}
+
+	ret = regmap_write(chip->regmap, ISL29028_REG_CONFIGURE, 0x0);
+	if (ret < 0) {
+		dev_err(chip->dev, "%s(): write to reg %d failed, err = %d\n",
+			__func__, ISL29028_REG_CONFIGURE, ret);
+		return ret;
+	}
+
+	ret = isl29028_set_proxim_sampling(chip, chip->prox_sampling);
+	if (ret < 0) {
+		dev_err(chip->dev, "%s(): setting the proximity, err = %d\n",
+			__func__, ret);
+		return ret;
+	}
+
+	ret = isl29028_set_als_scale(chip, chip->lux_scale);
+	if (ret < 0)
+		dev_err(chip->dev, "%s(): setting als scale failed, err = %d\n",
+			__func__, ret);
+	return ret;
 }
 
-static irqreturn_t threshold_isr(int irq, void *irq_data)
+static bool is_volatile_reg(struct device *dev, unsigned int reg)
 {
-	struct isl29028_chip *chip = (struct isl29028_chip *)irq_data;
-	s32 int_reg;
-	struct i2c_client *client = chip->client;
-
-	int_reg = i2c_smbus_read_byte_data(client, ISL29028_REG_ADD_INTERRUPT);
-	if (int_reg < 0) {
-		dev_err(&client->dev, "Error in reading register %d, error %d\n",
-				ISL29028_REG_ADD_INTERRUPT, int_reg);
-		return IRQ_HANDLED;
+	switch (reg) {
+	case ISL29028_REG_INTERRUPT:
+	case ISL29028_REG_PROX_DATA:
+	case ISL29028_REG_ALSIR_L:
+	case ISL29028_REG_ALSIR_U:
+		return true;
+	default:
+		return false;
 	}
-
-	if (int_reg & INTERRUPT_PROX_FLAG_MASK) {
-		/* Write 0 to clear */
-		isl29028_write_data(client,
-			ISL29028_REG_ADD_INTERRUPT, INTERRUPT_PROX_FLAG_DIS,
-			INTERRUPT_PROX_FLAG_MASK, INTERRUPT_PROX_FLAG_SH);
-		if (chip->is_proxim_int_waiting)
-			complete(&chip->prox_completion);
-	}
-
-	if (int_reg & INTERRUPT_ALS_FLAG_MASK) {
-		/* Write 0 to clear */
-		isl29028_write_data(client,
-			ISL29028_REG_ADD_INTERRUPT, INTERRUPT_ALS_FLAG_DIS,
-			INTERRUPT_ALS_FLAG_MASK, INTERRUPT_ALS_FLAG_SH);
-		if (chip->is_als_int_waiting)
-			complete(&chip->als_completion);
-	}
-
-	return IRQ_HANDLED;
 }
+
+static const struct regmap_config isl29028_regmap_config = {
+	.reg_bits = 8,
+	.val_bits = 8,
+	.volatile_reg = is_volatile_reg,
+	.max_register = ISL29028_NUM_REGS - 1,
+	.num_reg_defaults_raw = ISL29028_NUM_REGS,
+	.cache_type = REGCACHE_RBTREE,
+};
 
 static int __devinit isl29028_probe(struct i2c_client *client,
 	const struct i2c_device_id *id)
 {
 	struct isl29028_chip *chip;
-	int err;
+	struct iio_dev *indio_dev;
+	int ret;
 
-	dev_dbg(&client->dev, "%s() called\n", __func__);
-
-	chip = kzalloc(sizeof(struct isl29028_chip), GFP_KERNEL);
-	if (!chip) {
-		dev_err(&client->dev, "Memory allocation fails\n");
-		err = -ENOMEM;
-		goto exit;
+	indio_dev = iio_device_alloc(sizeof(*chip));
+	if (!indio_dev) {
+		dev_err(&client->dev, "iio allocation fails\n");
+		return -ENOMEM;
 	}
 
-	i2c_set_clientdata(client, chip);
-	chip->client = client;
-	chip->irq = client->irq;
+	chip = iio_priv(indio_dev);
 
+	i2c_set_clientdata(client, indio_dev);
+	chip->dev = &client->dev;
 	mutex_init(&chip->lock);
 
-	err = isl29028_chip_init(client);
-	if (err)
-		goto exit_free;
-
-	init_completion(&chip->prox_completion);
-	init_completion(&chip->als_completion);
-
-	if (chip->irq > 0) {
-		err = request_threaded_irq(chip->irq, NULL, threshold_isr,
-						IRQF_SHARED, "ISL29028", chip);
-		if (err) {
-			dev_err(&client->dev, "Unable to register irq %d; "
-				"error %d\n", chip->irq, err);
-			goto exit_free;
-		}
-	}
-
-	chip->is_int_enable = true;
-	chip->indio_dev = iio_allocate_device();
-	if (!chip->indio_dev) {
-		dev_err(&client->dev, "iio allocation fails\n");
-		goto exit_irq;
-	}
-
-	chip->indio_dev->attrs = &isl29108_group;
-	chip->indio_dev->dev.parent = &client->dev;
-	chip->indio_dev->dev_data = (void *)(chip);
-	chip->indio_dev->driver_module = THIS_MODULE;
-	chip->indio_dev->modes = INDIO_DIRECT_MODE;
-	err = iio_device_register(chip->indio_dev);
-	if (err) {
-		dev_err(&client->dev, "iio registration fails\n");
+	chip->regmap = devm_regmap_init_i2c(client, &isl29028_regmap_config);
+	if (IS_ERR(chip->regmap)) {
+		ret = PTR_ERR(chip->regmap);
+		dev_err(chip->dev, "regmap initialization failed: %d\n", ret);
 		goto exit_iio_free;
 	}
-	dev_dbg(&client->dev, "%s() success\n", __func__);
+
+	ret = isl29028_chip_init(chip);
+	if (ret < 0) {
+		dev_err(chip->dev, "chip initialization failed: %d\n", ret);
+		goto exit_iio_free;
+	}
+
+	indio_dev->info = &isl29028_info;
+	indio_dev->channels = isl29028_channels;
+	indio_dev->num_channels = ARRAY_SIZE(isl29028_channels);
+	indio_dev->name = id->name;
+	indio_dev->dev.parent = &client->dev;
+	indio_dev->modes = INDIO_DIRECT_MODE;
+	ret = iio_device_register(indio_dev);
+	if (ret < 0) {
+		dev_err(chip->dev, "iio registration fails with error %d\n",
+			ret);
+		goto exit_iio_free;
+	}
 	return 0;
 
 exit_iio_free:
-	iio_free_device(chip->indio_dev);
-exit_irq:
-	if (chip->irq > 0)
-		free_irq(chip->irq, chip);
-exit_free:
-	kfree(chip);
-exit:
-	return err;
+	iio_device_free(indio_dev);
+	return ret;
 }
 
 static int __devexit isl29028_remove(struct i2c_client *client)
 {
-	struct isl29028_chip *chip = i2c_get_clientdata(client);
+	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 
-	dev_dbg(&client->dev, "%s()\n", __func__);
-	iio_device_unregister(chip->indio_dev);
-	if (chip->irq > 0)
-		free_irq(chip->irq, chip);
-	kfree(chip);
+	iio_device_unregister(indio_dev);
+	iio_device_free(indio_dev);
 	return 0;
 }
 
@@ -1237,29 +539,28 @@ static const struct i2c_device_id isl29028_id[] = {
 	{"isl29028", 0},
 	{}
 };
-
 MODULE_DEVICE_TABLE(i2c, isl29028_id);
+
+static const struct of_device_id isl29028_of_match[] = {
+	{ .compatible = "isil,isl29028", },
+	{ },
+};
+MODULE_DEVICE_TABLE(of, isl29028_of_match);
 
 static struct i2c_driver isl29028_driver = {
 	.class	= I2C_CLASS_HWMON,
 	.driver  = {
 		.name = "isl29028",
 		.owner = THIS_MODULE,
+		.of_match_table = isl29028_of_match,
 	},
 	.probe	 = isl29028_probe,
 	.remove  = __devexit_p(isl29028_remove),
 	.id_table = isl29028_id,
 };
 
-static int __init isl29028_init(void)
-{
-	return i2c_add_driver(&isl29028_driver);
-}
+module_i2c_driver(isl29028_driver);
 
-static void __exit isl29028_exit(void)
-{
-	i2c_del_driver(&isl29028_driver);
-}
-
-module_init(isl29028_init);
-module_exit(isl29028_exit);
+MODULE_DESCRIPTION("ISL29028 Ambient Light and Proximity Sensor driver");
+MODULE_LICENSE("GPL v2");
+MODULE_AUTHOR("Laxman Dewangan <ldewangan@nvidia.com>");

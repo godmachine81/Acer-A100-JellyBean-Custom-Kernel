@@ -19,9 +19,9 @@
 /* for Rx reordering buffer control */
 struct recv_reorder_ctrl {
 	struct _adapter	*padapter;
-	u16 indicate_seq;/* =wstart_b, init_value=0xffff */
+	u16 indicate_seq; /* =wstart_b, init_value=0xffff */
 	u16 wend_b;
-       u8 wsize_b;
+	u8 wsize_b;
 	struct  __queue pending_recvframe_queue;
 	struct timer_list reordering_ctrl_timer;
 };
@@ -85,8 +85,6 @@ using enter_critical section to protect
 */
 struct recv_priv {
 	spinlock_t lock;
-	struct semaphore recv_sema;
-	struct semaphore terminate_recvthread_sema;
 	struct  __queue	free_recv_queue;
 	struct  __queue	recv_pending_queue;
 	u8 *pallocated_frame_buf;
@@ -100,7 +98,6 @@ struct recv_priv {
 	uint  rx_largepacket_crcerr;
 	uint  rx_smallpacket_crcerr;
 	uint  rx_middlepacket_crcerr;
-	struct semaphore allrxreturnevt;
 	u8  rx_pending_cnt;
 	uint	ff_hwaddr;
 	struct tasklet_struct recv_tasklet;

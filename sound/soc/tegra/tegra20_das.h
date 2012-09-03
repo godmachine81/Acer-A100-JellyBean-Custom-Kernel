@@ -2,7 +2,7 @@
  * tegra20_das.h - Definitions for Tegra20 DAS driver
  *
  * Author: Stephen Warren <swarren@nvidia.com>
- * Copyright (C) 2010 - NVIDIA, Inc.
+ * Copyright (C) 2010,2012 - NVIDIA, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -83,29 +83,17 @@
 #define TEGRA20_DAS_DAC_ID_2 1
 #define TEGRA20_DAS_DAC_ID_3 2
 
-#ifdef CONFIG_PM
-#define TEGRA20_DAS_CACHE_SIZE	((((TEGRA20_DAS_DAC_INPUT_DATA_CLK_SEL) + (TEGRA20_DAS_DAC_INPUT_DATA_CLK_SEL_STRIDE*TEGRA20_DAS_DAC_ID_3))>>2) + 1)
-#endif
-
 struct tegra20_das {
 	struct device *dev;
-	void __iomem *regs;
-	struct dentry *debug;
-#ifdef CONFIG_PM
-	u32  reg_cache[TEGRA20_DAS_CACHE_SIZE];
-#endif
+	struct regmap *regmap;
 };
 
-#ifdef CONFIG_PM
-/* Restores the das registers from cache */
-extern int tegra20_das_resume();
-#endif
 /*
  * Terminology:
  * DAS: Digital audio switch (HW module controlled by this driver)
  * DAP: Digital audio port (port/pins on Tegra device)
  * DAC: Digital audio controller (e.g. I2S or AC97 controller elsewhere)
- * 
+ *
  * The Tegra DAS is a mux/cross-bar which can connect each DAP to a specific
  * DAC, or another DAP. When DAPs are connected, one must be the master and
  * one the slave. Each DAC allows selection of a specific DAP for input, to
@@ -132,8 +120,8 @@ extern int tegra20_das_connect_dap_to_dac(int dap_id, int dac_sel);
  * sdata2rx: Is this DAP's SDATA2 pin RX (1) or TX (0)
  */
 extern int tegra20_das_connect_dap_to_dap(int dap_id, int other_dap_sel,
-					int master, int sdata1rx,
-					int sdata2rx);
+					  int master, int sdata1rx,
+					  int sdata2rx);
 
 /*
  * Connect a DAC's input to a DAP

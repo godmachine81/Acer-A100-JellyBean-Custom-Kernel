@@ -17,6 +17,7 @@
 #include <linux/io.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
+#include <linux/prefetch.h>
 
 #include <asm/cacheflush.h>
 
@@ -35,6 +36,7 @@ struct bfin_glue {
  */
 void musb_write_fifo(struct musb_hw_ep *hw_ep, u16 len, const u8 *src)
 {
+	struct musb *musb = hw_ep->musb;
 	void __iomem *fifo = hw_ep->fifo;
 	void __iomem *epio = hw_ep->regs;
 	u8 epnum = hw_ep->epnum;
@@ -43,7 +45,7 @@ void musb_write_fifo(struct musb_hw_ep *hw_ep, u16 len, const u8 *src)
 
 	musb_writew(epio, MUSB_TXCOUNT, len);
 
-	DBG(4, "TX ep%d fifo %p count %d buf %p, epio %p\n",
+	dev_dbg(musb->controller, "TX ep%d fifo %p count %d buf %p, epio %p\n",
 			hw_ep->epnum, fifo, len, src, epio);
 
 	dump_fifo_data(src, len);
@@ -98,6 +100,7 @@ void musb_write_fifo(struct musb_hw_ep *hw_ep, u16 len, const u8 *src)
  */
 void musb_read_fifo(struct musb_hw_ep *hw_ep, u16 len, u8 *dst)
 {
+	struct musb *musb = hw_ep->musb;
 	void __iomem *fifo = hw_ep->fifo;
 	u8 epnum = hw_ep->epnum;
 
@@ -154,7 +157,7 @@ void musb_read_fifo(struct musb_hw_ep *hw_ep, u16 len, u8 *dst)
 				*(dst + len - 1) = (u8)inw((unsigned long)fifo + 4);
 		}
 	}
-	DBG(4, "%cX ep%d fifo %p count %d buf %p\n",
+	dev_dbg(musb->controller, "%cX ep%d fifo %p count %d buf %p\n",
 			'R', hw_ep->epnum, fifo, len, dst);
 
 	dump_fifo_data(dst, len);
@@ -279,12 +282,14 @@ static void musb_conn_timer_handler(unsigned long _musb)
 		}
 		break;
 	default:
-		DBG(1, "%s state not handled\n", otg_state_string(musb));
+		dev_dbg(musb->controller, "%s state not handled\n",
+			otg_state_string(musb->xceiv->state));
 		break;
 	}
 	spin_unlock_irqrestore(&musb->lock, flags);
 
-	DBG(4, "state is %s\n", otg_state_string(musb));
+	dev_dbg(musb->controller, "state is %s\n",
+		otg_state_string(musb->xceiv->state));
 }
 
 static void bfin_musb_enable(struct musb *musb)
@@ -306,13 +311,13 @@ static void bfin_musb_set_vbus(struct musb *musb, int is_on)
 		value = !value;
 	gpio_set_value(musb->config->gpio_vrsel, value);
 
-	DBG(1, "VBUS %s, devctl %02x "
+	dev_dbg(musb->controller, "VBUS %s, devctl %02x "
 		/* otg %3x conf %08x prcm %08x */ "\n",
-		otg_state_string(musb),
+		otg_state_string(musb->xceiv->state),
 		musb_readb(musb->mregs, MUSB_DEVCTL));
 }
 
-static int bfin_musb_set_power(struct otg_transceiver *x, unsigned mA)
+static int bfin_musb_set_power(struct usb_phy *x, unsigned mA)
 {
 	return 0;
 }
@@ -410,7 +415,7 @@ static int bfin_musb_init(struct musb *musb)
 	gpio_direction_output(musb->config->gpio_vrsel, 0);
 
 	usb_nop_xceiv_register();
-	musb->xceiv = otg_get_transceiver();
+	musb->xceiv = usb_get_transceiver();
 	if (!musb->xceiv) {
 		gpio_free(musb->config->gpio_vrsel);
 		return -ENODEV;
@@ -435,7 +440,7 @@ static int bfin_musb_exit(struct musb *musb)
 {
 	gpio_free(musb->config->gpio_vrsel);
 
-	otg_put_transceiver(musb->xceiv);
+	usb_put_transceiver(musb->xceiv);
 	usb_nop_xceiv_unregister();
 	return 0;
 }
@@ -458,7 +463,7 @@ static const struct musb_platform_ops bfin_ops = {
 
 static u64 bfin_dmamask = DMA_BIT_MASK(32);
 
-static int __init bfin_probe(struct platform_device *pdev)
+static int __devinit bfin_probe(struct platform_device *pdev)
 {
 	struct musb_hdrc_platform_data	*pdata = pdev->dev.platform_data;
 	struct platform_device		*musb;
@@ -520,7 +525,7 @@ err0:
 	return ret;
 }
 
-static int __exit bfin_remove(struct platform_device *pdev)
+static int __devexit bfin_remove(struct platform_device *pdev)
 {
 	struct bfin_glue		*glue = platform_get_drvdata(pdev);
 
@@ -570,6 +575,7 @@ static struct dev_pm_ops bfin_pm_ops = {
 #endif
 
 static struct platform_driver bfin_driver = {
+	.probe		= bfin_probe,
 	.remove		= __exit_p(bfin_remove),
 	.driver		= {
 		.name	= "musb-blackfin",
@@ -583,9 +589,9 @@ MODULE_LICENSE("GPL v2");
 
 static int __init bfin_init(void)
 {
-	return platform_driver_probe(&bfin_driver, bfin_probe);
+	return platform_driver_register(&bfin_driver);
 }
-subsys_initcall(bfin_init);
+module_init(bfin_init);
 
 static void __exit bfin_exit(void)
 {

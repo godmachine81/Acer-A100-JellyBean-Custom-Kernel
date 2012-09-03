@@ -38,7 +38,7 @@
 #include "cx18-ioctl.h"
 #include "cx18-controls.h"
 #include "tuner-xc2028.h"
-
+#include <linux/dma-mapping.h>
 #include <media/tveeprom.h>
 
 /* If you have already X v4l cards, then set this to X. This way
@@ -110,7 +110,7 @@ static int retry_mmio = 1;
 int cx18_debug;
 
 module_param_array(tuner, int, &tuner_c, 0644);
-module_param_array(radio, bool, &radio_c, 0644);
+module_param_array(radio, int, &radio_c, 0644);
 module_param_array(cardtype, int, &cardtype_c, 0644);
 module_param_string(pal, pal, sizeof(pal), 0644);
 module_param_string(secam, secam, sizeof(secam), 0644);
@@ -423,7 +423,16 @@ static void cx18_process_eeprom(struct cx18 *cx)
 		return;
 
 	/* autodetect tuner standard */
-	if (tv.tuner_formats & V4L2_STD_PAL) {
+#define TVEEPROM_TUNER_FORMAT_ALL (V4L2_STD_B  | V4L2_STD_GH | \
+				   V4L2_STD_MN | \
+				   V4L2_STD_PAL_I | \
+				   V4L2_STD_SECAM_L | V4L2_STD_SECAM_LC | \
+				   V4L2_STD_DK)
+	if ((tv.tuner_formats & TVEEPROM_TUNER_FORMAT_ALL)
+					== TVEEPROM_TUNER_FORMAT_ALL) {
+		CX18_DEBUG_INFO("Worldwide tuner detected\n");
+		cx->std = V4L2_STD_ALL;
+	} else if (tv.tuner_formats & V4L2_STD_PAL) {
 		CX18_DEBUG_INFO("PAL tuner detected\n");
 		cx->std |= V4L2_STD_PAL_BG | V4L2_STD_PAL_H;
 	} else if (tv.tuner_formats & V4L2_STD_NTSC) {
@@ -803,7 +812,7 @@ static int cx18_setup_pci(struct cx18 *cx, struct pci_dev *pci_dev,
 		CX18_ERR("Can't enable device %d!\n", cx->instance);
 		return -EIO;
 	}
-	if (pci_set_dma_mask(pci_dev, 0xffffffff)) {
+	if (pci_set_dma_mask(pci_dev, DMA_BIT_MASK(32))) {
 		CX18_ERR("No suitable DMA available, card %d\n", cx->instance);
 		return -EIO;
 	}
@@ -818,7 +827,7 @@ static int cx18_setup_pci(struct cx18 *cx, struct pci_dev *pci_dev,
 	cmd |= PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER;
 	pci_write_config_word(pci_dev, PCI_COMMAND, cmd);
 
-	pci_read_config_byte(pci_dev, PCI_CLASS_REVISION, &cx->card_rev);
+	cx->card_rev = pci_dev->revision;
 	pci_read_config_byte(pci_dev, PCI_LATENCY_TIMER, &pci_latency);
 
 	if (pci_latency < 64 && cx18_pci_latency) {
@@ -829,10 +838,10 @@ static int cx18_setup_pci(struct cx18 *cx, struct pci_dev *pci_dev,
 	}
 
 	CX18_DEBUG_INFO("cx%d (rev %d) at %02x:%02x.%x, "
-		   "irq: %d, latency: %d, memory: 0x%lx\n",
+		   "irq: %d, latency: %d, memory: 0x%llx\n",
 		   cx->pci_dev->device, cx->card_rev, pci_dev->bus->number,
 		   PCI_SLOT(pci_dev->devfn), PCI_FUNC(pci_dev->devfn),
-		   cx->pci_dev->irq, pci_latency, (unsigned long)cx->base_addr);
+		   cx->pci_dev->irq, pci_latency, (u64)cx->base_addr);
 
 	return 0;
 }
@@ -929,7 +938,7 @@ static int __devinit cx18_probe(struct pci_dev *pci_dev,
 	if (retval)
 		goto err;
 
-	CX18_DEBUG_INFO("base addr: 0x%08x\n", cx->base_addr);
+	CX18_DEBUG_INFO("base addr: 0x%llx\n", (u64)cx->base_addr);
 
 	/* PCI Device Setup */
 	retval = cx18_setup_pci(cx, pci_dev, pci_id);
@@ -937,8 +946,8 @@ static int __devinit cx18_probe(struct pci_dev *pci_dev,
 		goto free_workqueues;
 
 	/* map io memory */
-	CX18_DEBUG_INFO("attempting ioremap at 0x%08x len 0x%08x\n",
-		   cx->base_addr + CX18_MEM_OFFSET, CX18_MEM_SIZE);
+	CX18_DEBUG_INFO("attempting ioremap at 0x%llx len 0x%08x\n",
+		   (u64)cx->base_addr + CX18_MEM_OFFSET, CX18_MEM_SIZE);
 	cx->enc_mem = ioremap_nocache(cx->base_addr + CX18_MEM_OFFSET,
 				       CX18_MEM_SIZE);
 	if (!cx->enc_mem) {
@@ -1001,7 +1010,15 @@ static int __devinit cx18_probe(struct pci_dev *pci_dev,
 	if (cx->card->hw_all & CX18_HW_TVEEPROM) {
 		/* Based on the model number the cardtype may be changed.
 		   The PCI IDs are not always reliable. */
+		const struct cx18_card *orig_card = cx->card;
 		cx18_process_eeprom(cx);
+
+		if (cx->card != orig_card) {
+			/* Changed the cardtype; re-reset the I2C chips */
+			cx18_gpio_init(cx);
+			cx18_call_hw(cx, CX18_HW_GPIO_RESET_CTRL,
+					core, reset, (u32) CX18_GPIO_RESET_I2C);
+		}
 	}
 	if (cx->card->comment)
 		CX18_INFO("%s", cx->card->comment);
@@ -1068,6 +1085,8 @@ static int __devinit cx18_probe(struct pci_dev *pci_dev,
 		setup.addr = ADDR_UNSET;
 		setup.type = cx->options.tuner;
 		setup.mode_mask = T_ANALOG_TV;  /* matches TV tuners */
+		if (cx->options.radio > 0)
+			setup.mode_mask |= T_RADIO;
 		setup.tuner_callback = (setup.type == TUNER_XC2028) ?
 			cx18_reset_tuner_gpio : NULL;
 		cx18_call_all(cx, tuner, s_type_addr, &setup);
@@ -1087,6 +1106,8 @@ static int __devinit cx18_probe(struct pci_dev *pci_dev,
 	/* The tuner is fixed to the standard. The other inputs (e.g. S-Video)
 	   are not. */
 	cx->tuner_std = cx->std;
+	if (cx->std == V4L2_STD_ALL)
+		cx->std = V4L2_STD_NTSC_M;
 
 	retval = cx18_streams_setup(cx);
 	if (retval) {
@@ -1133,6 +1154,7 @@ int cx18_init_on_first_open(struct cx18 *cx)
 	int fw_retry_count = 3;
 	struct v4l2_frequency vf;
 	struct cx18_open_id fh;
+	v4l2_std_id std;
 
 	fh.cx = cx;
 
@@ -1220,7 +1242,8 @@ int cx18_init_on_first_open(struct cx18 *cx)
 	/* Let the VIDIOC_S_STD ioctl do all the work, keeps the code
 	   in one place. */
 	cx->std++;		/* Force full standard initialization */
-	cx18_s_std(NULL, &fh, &cx->tuner_std);
+	std = (cx->tuner_std == V4L2_STD_ALL) ? V4L2_STD_NTSC_M : cx->tuner_std;
+	cx18_s_std(NULL, &fh, &std);
 	cx18_s_frequency(NULL, &fh, &vf);
 	return 0;
 }

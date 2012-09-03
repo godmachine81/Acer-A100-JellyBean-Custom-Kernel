@@ -105,6 +105,7 @@ enum drbd_req_event {
 	read_completed_with_error,
 	read_ahead_completed_with_error,
 	write_completed_with_error,
+	abort_disk_io,
 	completed_ok,
 	resend,
 	fail_frozen_disk_io,
@@ -118,18 +119,21 @@ enum drbd_req_event {
  * same time, so we should hold the request lock anyways.
  */
 enum drbd_req_state_bits {
-	/* 210
-	 * 000: no local possible
-	 * 001: to be submitted
+	/* 3210
+	 * 0000: no local possible
+	 * 0001: to be submitted
 	 *    UNUSED, we could map: 011: submitted, completion still pending
-	 * 110: completed ok
-	 * 010: completed with error
+	 * 0110: completed ok
+	 * 0010: completed with error
+	 * 1001: Aborted (before completion)
+	 * 1x10: Aborted and completed -> free
 	 */
 	__RQ_LOCAL_PENDING,
 	__RQ_LOCAL_COMPLETED,
 	__RQ_LOCAL_OK,
+	__RQ_LOCAL_ABORTED,
 
-	/* 76543
+	/* 87654
 	 * 00000: no network possible
 	 * 00001: to be send
 	 * 00011: to be send, on worker queue
@@ -199,8 +203,9 @@ enum drbd_req_state_bits {
 #define RQ_LOCAL_PENDING   (1UL << __RQ_LOCAL_PENDING)
 #define RQ_LOCAL_COMPLETED (1UL << __RQ_LOCAL_COMPLETED)
 #define RQ_LOCAL_OK        (1UL << __RQ_LOCAL_OK)
+#define RQ_LOCAL_ABORTED   (1UL << __RQ_LOCAL_ABORTED)
 
-#define RQ_LOCAL_MASK      ((RQ_LOCAL_OK << 1)-1) /* 0x07 */
+#define RQ_LOCAL_MASK      ((RQ_LOCAL_ABORTED << 1)-1)
 
 #define RQ_NET_PENDING     (1UL << __RQ_NET_PENDING)
 #define RQ_NET_QUEUED      (1UL << __RQ_NET_QUEUED)
@@ -256,7 +261,7 @@ static inline struct drbd_request *_ar_id_to_req(struct drbd_conf *mdev,
 	struct hlist_node *n;
 	struct drbd_request *req;
 
-	hlist_for_each_entry(req, n, slot, colision) {
+	hlist_for_each_entry(req, n, slot, collision) {
 		if ((unsigned long)req == (unsigned long)id) {
 			D_ASSERT(req->sector == sector);
 			return req;
@@ -291,7 +296,7 @@ static inline struct drbd_request *drbd_req_new(struct drbd_conf *mdev,
 		req->epoch       = 0;
 		req->sector      = bio_src->bi_sector;
 		req->size        = bio_src->bi_size;
-		INIT_HLIST_NODE(&req->colision);
+		INIT_HLIST_NODE(&req->collision);
 		INIT_LIST_HEAD(&req->tl_requests);
 		INIT_LIST_HEAD(&req->w.list);
 	}
@@ -323,6 +328,7 @@ extern int __req_mod(struct drbd_request *req, enum drbd_req_event what,
 extern void complete_master_bio(struct drbd_conf *mdev,
 		struct bio_and_error *m);
 extern void request_timer_fn(unsigned long data);
+extern void tl_restart(struct drbd_conf *mdev, enum drbd_req_event what);
 
 /* use this if you don't want to deal with calling complete_master_bio()
  * outside the spinlock, e.g. when walking some list on cleanup. */

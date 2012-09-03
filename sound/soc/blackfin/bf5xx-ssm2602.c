@@ -44,27 +44,8 @@
 
 static struct snd_soc_card bf5xx_ssm2602;
 
-static int bf5xx_ssm2602_startup(struct snd_pcm_substream *substream)
+static int bf5xx_ssm2602_dai_init(struct snd_soc_pcm_runtime *rtd)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
-
-	pr_debug("%s enter\n", __func__);
-	snd_soc_dai_set_drvdata(cpu_dai, sport_handle);
-	return 0;
-}
-
-static int bf5xx_ssm2602_hw_params(struct snd_pcm_substream *substream,
-	struct snd_pcm_hw_params *params)
-{
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *codec_dai = rtd->codec_dai;
-	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
-	unsigned int clk = 0;
-	int ret = 0;
-
-	pr_debug("%s rate %d format %x\n", __func__, params_rate(params),
-		params_format(params));
 	/*
 	 * If you are using a crystal source which frequency is not 12MHz
 	 * then modify the below case statement with frequency of the crystal.
@@ -72,60 +53,41 @@ static int bf5xx_ssm2602_hw_params(struct snd_pcm_substream *substream,
 	 * If you are using the SPORT to generate clocking then this is
 	 * where to do it.
 	 */
-
-	switch (params_rate(params)) {
-	case 8000:
-	case 16000:
-	case 48000:
-	case 96000:
-	case 11025:
-	case 22050:
-	case 44100:
-		clk = 12000000;
-		break;
-	}
-
-	/*
-	 * CODEC is master for BCLK and LRC in this configuration.
-	 */
-
-	/* set codec DAI configuration */
-	ret = snd_soc_dai_set_fmt(codec_dai, SND_SOC_DAIFMT_I2S |
-		SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_CBM_CFM);
-	if (ret < 0)
-		return ret;
-	/* set cpu DAI configuration */
-	ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_I2S |
-		SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_CBM_CFM);
-	if (ret < 0)
-		return ret;
-
-	ret = snd_soc_dai_set_sysclk(codec_dai, SSM2602_SYSCLK, clk,
+	return snd_soc_dai_set_sysclk(rtd->codec_dai, SSM2602_SYSCLK, 12000000,
 		SND_SOC_CLOCK_IN);
-	if (ret < 0)
-		return ret;
-
-	return 0;
 }
 
-static struct snd_soc_ops bf5xx_ssm2602_ops = {
-	.startup = bf5xx_ssm2602_startup,
-	.hw_params = bf5xx_ssm2602_hw_params,
-};
+/* CODEC is master for BCLK and LRC in this configuration. */
+#define BF5XX_SSM2602_DAIFMT (SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF | \
+				SND_SOC_DAIFMT_CBM_CFM)
 
-static struct snd_soc_dai_link bf5xx_ssm2602_dai = {
-	.name = "ssm2602",
-	.stream_name = "SSM2602",
-	.cpu_dai_name = "bf5xx-i2s",
-	.codec_dai_name = "ssm2602-hifi",
-	.platform_name = "bf5xx-pcm-audio",
-	.codec_name = "ssm2602-codec.0-001b",
-	.ops = &bf5xx_ssm2602_ops,
+static struct snd_soc_dai_link bf5xx_ssm2602_dai[] = {
+	{
+		.name = "ssm2602",
+		.stream_name = "SSM2602",
+		.cpu_dai_name = "bfin-i2s.0",
+		.codec_dai_name = "ssm2602-hifi",
+		.platform_name = "bfin-i2s-pcm-audio",
+		.codec_name = "ssm2602.0-001b",
+		.init = bf5xx_ssm2602_dai_init,
+		.dai_fmt = BF5XX_SSM2602_DAIFMT,
+	},
+	{
+		.name = "ssm2602",
+		.stream_name = "SSM2602",
+		.cpu_dai_name = "bfin-i2s.1",
+		.codec_dai_name = "ssm2602-hifi",
+		.platform_name = "bfin-i2s-pcm-audio",
+		.codec_name = "ssm2602.0-001b",
+		.init = bf5xx_ssm2602_dai_init,
+		.dai_fmt = BF5XX_SSM2602_DAIFMT,
+	},
 };
 
 static struct snd_soc_card bf5xx_ssm2602 = {
-	.name = "bf5xx_ssm2602",
-	.dai_link = &bf5xx_ssm2602_dai,
+	.name = "bfin-ssm2602",
+	.owner = THIS_MODULE,
+	.dai_link = &bf5xx_ssm2602_dai[CONFIG_SND_BF5XX_SPORT_NUM],
 	.num_links = 1,
 };
 

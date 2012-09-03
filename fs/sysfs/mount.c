@@ -36,7 +36,7 @@ struct sysfs_dirent sysfs_root = {
 	.s_name		= "",
 	.s_count	= ATOMIC_INIT(1),
 	.s_flags	= SYSFS_DIR | (KOBJ_NS_TYPE_NONE << SYSFS_NS_TYPE_SHIFT),
-	.s_mode		= S_IFDIR | S_IRWXU | S_IRUGO | S_IXUGO,
+	.s_mode		= S_IFDIR | S_IRUGO | S_IXUGO,
 	.s_ino		= 1,
 };
 
@@ -61,10 +61,9 @@ static int sysfs_fill_super(struct super_block *sb, void *data, int silent)
 	}
 
 	/* instantiate and link root dentry */
-	root = d_alloc_root(inode);
+	root = d_make_root(inode);
 	if (!root) {
 		pr_debug("%s: could not get root dentry!\n",__func__);
-		iput(inode);
 		return -ENOMEM;
 	}
 	root->d_fsdata = &sysfs_root;
@@ -95,6 +94,14 @@ static int sysfs_set_super(struct super_block *sb, void *data)
 	return error;
 }
 
+static void free_sysfs_super_info(struct sysfs_super_info *info)
+{
+	int type;
+	for (type = KOBJ_NS_TYPE_NONE; type < KOBJ_NS_TYPES; type++)
+		kobj_ns_drop(type, info->ns[type]);
+	kfree(info);
+}
+
 static struct dentry *sysfs_mount(struct file_system_type *fs_type,
 	int flags, const char *dev_name, void *data)
 {
@@ -108,11 +115,11 @@ static struct dentry *sysfs_mount(struct file_system_type *fs_type,
 		return ERR_PTR(-ENOMEM);
 
 	for (type = KOBJ_NS_TYPE_NONE; type < KOBJ_NS_TYPES; type++)
-		info->ns[type] = kobj_ns_current(type);
+		info->ns[type] = kobj_ns_grab_current(type);
 
 	sb = sget(fs_type, sysfs_test_super, sysfs_set_super, info);
 	if (IS_ERR(sb) || sb->s_fs_info != info)
-		kfree(info);
+		free_sysfs_super_info(info);
 	if (IS_ERR(sb))
 		return ERR_CAST(sb);
 	if (!sb->s_root) {
@@ -131,12 +138,11 @@ static struct dentry *sysfs_mount(struct file_system_type *fs_type,
 static void sysfs_kill_sb(struct super_block *sb)
 {
 	struct sysfs_super_info *info = sysfs_info(sb);
-
 	/* Remove the superblock from fs_supers/s_instances
 	 * so we can't find it, before freeing sysfs_super_info.
 	 */
 	kill_anon_super(sb);
-	kfree(info);
+	free_sysfs_super_info(info);
 }
 
 static struct file_system_type sysfs_fs_type = {
@@ -144,28 +150,6 @@ static struct file_system_type sysfs_fs_type = {
 	.mount		= sysfs_mount,
 	.kill_sb	= sysfs_kill_sb,
 };
-
-void sysfs_exit_ns(enum kobj_ns_type type, const void *ns)
-{
-	struct super_block *sb;
-
-	mutex_lock(&sysfs_mutex);
-	spin_lock(&sb_lock);
-	list_for_each_entry(sb, &sysfs_fs_type.fs_supers, s_instances) {
-		struct sysfs_super_info *info = sysfs_info(sb);
-		/*
-		 * If we see a superblock on the fs_supers/s_instances
-		 * list the unmount has not completed and sb->s_fs_info
-		 * points to a valid struct sysfs_super_info.
-		 */
-		/* Ignore superblocks with the wrong ns */
-		if (info->ns[type] != ns)
-			continue;
-		info->ns[type] = NULL;
-	}
-	spin_unlock(&sb_lock);
-	mutex_unlock(&sysfs_mutex);
-}
 
 int __init sysfs_init(void)
 {

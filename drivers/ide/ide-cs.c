@@ -41,7 +41,6 @@
 #include <linux/major.h>
 #include <linux/delay.h>
 #include <asm/io.h>
-#include <asm/system.h>
 
 #include <pcmcia/cistpl.h>
 #include <pcmcia/ds.h>
@@ -168,7 +167,8 @@ static int pcmcia_check_one_config(struct pcmcia_device *pdev, void *priv_data)
 {
 	int *is_kme = priv_data;
 
-	if (!(pdev->resource[0]->flags & IO_DATA_PATH_WIDTH_8)) {
+	if ((pdev->resource[0]->flags & IO_DATA_PATH_WIDTH)
+	    != IO_DATA_PATH_WIDTH_8) {
 		pdev->resource[0]->flags &= ~IO_DATA_PATH_WIDTH;
 		pdev->resource[0]->flags |= IO_DATA_PATH_WIDTH_AUTO;
 	}
@@ -272,7 +272,7 @@ static void ide_release(struct pcmcia_device *link)
 } /* ide_release */
 
 
-static struct pcmcia_device_id ide_ids[] = {
+static const struct pcmcia_device_id ide_ids[] = {
 	PCMCIA_DEVICE_FUNC_ID(4),
 	PCMCIA_DEVICE_MANF_CARD(0x0000, 0x0000),	/* Corsair */
 	PCMCIA_DEVICE_MANF_CARD(0x0007, 0x0000),	/* Hitachi */

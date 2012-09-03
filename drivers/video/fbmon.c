@@ -493,7 +493,8 @@ static int get_est_timing(unsigned char *block, struct fb_videomode *mode)
 	return num;
 }
 
-static int get_std_timing(unsigned char *block, struct fb_videomode *mode)
+static int get_std_timing(unsigned char *block, struct fb_videomode *mode,
+		int ver, int rev)
 {
 	int xres, yres = 0, refresh, ratio, i;
 
@@ -504,7 +505,11 @@ static int get_std_timing(unsigned char *block, struct fb_videomode *mode)
 	ratio = (block[1] & 0xc0) >> 6;
 	switch (ratio) {
 	case 0:
-		yres = xres;
+		/* in EDID 1.3 the meaning of 0 changed to 16:10 (prior 1:1) */
+		if (ver < 1 || (ver == 1 && rev < 3))
+			yres = xres;
+		else
+			yres = (xres * 10)/16;
 		break;
 	case 1:
 		yres = (xres * 3)/4;
@@ -533,12 +538,12 @@ static int get_std_timing(unsigned char *block, struct fb_videomode *mode)
 }
 
 static int get_dst_timing(unsigned char *block,
-			  struct fb_videomode *mode)
+			  struct fb_videomode *mode, int ver, int rev)
 {
 	int j, num = 0;
 
 	for (j = 0; j < 6; j++, block += STD_TIMING_DESCRIPTION_SIZE)
-		num += get_std_timing(block, &mode[num]);
+		num += get_std_timing(block, &mode[num], ver, rev);
 
 	return num;
 }
@@ -546,9 +551,6 @@ static int get_dst_timing(unsigned char *block,
 static void get_detailed_timing(unsigned char *block,
 				struct fb_videomode *mode)
 {
-	int v_size = V_SIZE;
-	int h_size = H_SIZE;
-
 	mode->xres = H_ACTIVE;
 	mode->yres = V_ACTIVE;
 	mode->pixclock = PIXEL_CLOCK;
@@ -577,18 +579,11 @@ static void get_detailed_timing(unsigned char *block,
 	}
 	mode->flag = FB_MODE_IS_DETAILED;
 
-	/* get aspect ratio */
-	if (h_size * 18 > v_size * 31 && h_size * 18 < v_size * 33)
-		mode->flag |= FB_FLAG_RATIO_16_9;
-	if (h_size * 18 > v_size * 23 && h_size * 18 < v_size * 25)
-		mode->flag |= FB_FLAG_RATIO_4_3;
-
 	DPRINTK("      %d MHz ",  PIXEL_CLOCK/1000000);
 	DPRINTK("%d %d %d %d ", H_ACTIVE, H_ACTIVE + H_SYNC_OFFSET,
 	       H_ACTIVE + H_SYNC_OFFSET + H_SYNC_WIDTH, H_ACTIVE + H_BLANKING);
 	DPRINTK("%d %d %d %d ", V_ACTIVE, V_ACTIVE + V_SYNC_OFFSET,
 	       V_ACTIVE + V_SYNC_OFFSET + V_SYNC_WIDTH, V_ACTIVE + V_BLANKING);
-	DPRINTK("%dmm %dmm ", H_SIZE, V_SIZE);
 	DPRINTK("%sHSync %sVSync\n\n", (HSYNC_POSITIVE) ? "+" : "-",
 	       (VSYNC_POSITIVE) ? "+" : "-");
 }
@@ -609,6 +604,10 @@ static struct fb_videomode *fb_create_modedb(unsigned char *edid, int *dbsize)
 	struct fb_videomode *mode, *m;
 	unsigned char *block;
 	int num = 0, i, first = 1;
+	int ver, rev;
+
+	ver = edid[EDID_STRUCT_VERSION];
+	rev = edid[EDID_STRUCT_REVISION];
 
 	mode = kzalloc(50 * sizeof(struct fb_videomode), GFP_KERNEL);
 	if (mode == NULL)
@@ -642,12 +641,12 @@ static struct fb_videomode *fb_create_modedb(unsigned char *edid, int *dbsize)
 	DPRINTK("   Standard Timings\n");
 	block = edid + STD_TIMING_DESCRIPTIONS_START;
 	for (i = 0; i < STD_TIMING; i++, block += STD_TIMING_DESCRIPTION_SIZE)
-		num += get_std_timing(block, &mode[num]);
+		num += get_std_timing(block, &mode[num], ver, rev);
 
 	block = edid + DETAILED_TIMING_DESCRIPTIONS_START;
 	for (i = 0; i < 4; i++, block+= DETAILED_TIMING_DESCRIPTION_SIZE) {
 		if (block[0] == 0x00 && block[1] == 0x00 && block[3] == 0xfa)
-			num += get_dst_timing(block + 5, &mode[num]);
+			num += get_dst_timing(block + 5, &mode[num], ver, rev);
 	}
 
 	/* Yikes, EDID data is totally useless */
@@ -986,7 +985,7 @@ void fb_edid_to_monspecs(unsigned char *edid, struct fb_monspecs *specs)
 /**
  * fb_edid_add_monspecs() - add monitor video modes from E-EDID data
  * @edid:	128 byte array with an E-EDID block
- * @specs:	monitor specs to be extended
+ * @spacs:	monitor specs to be extended
  */
 void fb_edid_add_monspecs(unsigned char *edid, struct fb_monspecs *specs)
 {
@@ -1011,23 +1010,14 @@ void fb_edid_add_monspecs(unsigned char *edid, struct fb_monspecs *specs)
 	while (pos < edid[2]) {
 		u8 len = edid[pos] & 0x1f, type = (edid[pos] >> 5) & 7;
 		pr_debug("Data block %u of %u bytes\n", type, len);
-
-		pos++;
-		if (type == 2) {
+		if (type == 2)
 			for (i = pos; i < pos + len; i++) {
-				u8 idx = edid[i] & 0x7f;
+				u8 idx = edid[pos + i] & 0x7f;
 				svd[svd_n++] = idx;
 				pr_debug("N%sative mode #%d\n",
-					 edid[i] & 0x80 ? "" : "on-n", idx);
+					 edid[pos + i] & 0x80 ? "" : "on-n", idx);
 			}
-		} else if (type == 3 && len >= 3) {
-			u32 ieee_reg = edid[pos] | (edid[pos + 1] << 8) |
-				(edid[pos + 2] << 16);
-			if (ieee_reg == 0x000c03)
-				specs->misc |= FB_MISC_HDMI;
-		}
-
-		pos += len;
+		pos += len + 1;
 	}
 
 	block = edid + edid[2];
@@ -1060,8 +1050,10 @@ void fb_edid_add_monspecs(unsigned char *edid, struct fb_monspecs *specs)
 
 	for (i = specs->modedb_len + num; i < specs->modedb_len + num + svd_n; i++) {
 		int idx = svd[i - specs->modedb_len - num];
-		if (!idx || idx > (CEA_MODEDB_SIZE - 1)) {
+		if (!idx || idx > 63) {
 			pr_warning("Reserved SVD code %d\n", idx);
+		} else if (idx > ARRAY_SIZE(cea_modes) || !cea_modes[idx].xres) {
+			pr_warning("Unimplemented SVD code %d\n", idx);
 		} else {
 			memcpy(&m[i], cea_modes + idx, sizeof(m[i]));
 			pr_debug("Adding SVD #%d: %ux%u@%u\n", idx,

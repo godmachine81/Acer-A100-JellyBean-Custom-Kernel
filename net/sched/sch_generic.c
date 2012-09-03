@@ -60,7 +60,7 @@ static inline struct sk_buff *dequeue_skb(struct Qdisc *q)
 
 		/* check the reason of requeuing without tx lock first */
 		txq = netdev_get_tx_queue(dev, skb_get_queue_mapping(skb));
-		if (!netif_tx_queue_frozen_or_stopped(txq)) {
+		if (!netif_xmit_frozen_or_stopped(txq)) {
 			q->gso_skb = NULL;
 			q->q.qlen--;
 		} else
@@ -86,9 +86,8 @@ static inline int handle_dev_cpu_collision(struct sk_buff *skb,
 		 * deadloop is detected. Return OK to try the next skb.
 		 */
 		kfree_skb(skb);
-		if (net_ratelimit())
-			pr_warning("Dead loop on netdevice %s, fix it urgently!\n",
-				   dev_queue->dev->name);
+		net_warn_ratelimited("Dead loop on netdevice %s, fix it urgently!\n",
+				     dev_queue->dev->name);
 		ret = qdisc_qlen(q);
 	} else {
 		/*
@@ -121,7 +120,7 @@ int sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
 	spin_unlock(root_lock);
 
 	HARD_TX_LOCK(dev, txq, smp_processor_id());
-	if (!netif_tx_queue_frozen_or_stopped(txq))
+	if (!netif_xmit_frozen_or_stopped(txq))
 		ret = dev_hard_start_xmit(skb, dev, txq);
 
 	HARD_TX_UNLOCK(dev, txq);
@@ -136,14 +135,14 @@ int sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
 		ret = handle_dev_cpu_collision(skb, txq, q);
 	} else {
 		/* Driver returned NETDEV_TX_BUSY - requeue skb */
-		if (unlikely (ret != NETDEV_TX_BUSY && net_ratelimit()))
-			pr_warning("BUG %s code %d qlen %d\n",
-				   dev->name, ret, q->q.qlen);
+		if (unlikely(ret != NETDEV_TX_BUSY))
+			net_warn_ratelimited("BUG %s code %d qlen %d\n",
+					     dev->name, ret, q->q.qlen);
 
 		ret = dev_requeue_skb(skb, q);
 	}
 
-	if (ret && netif_tx_queue_frozen_or_stopped(txq))
+	if (ret && netif_xmit_frozen_or_stopped(txq))
 		ret = 0;
 
 	return ret;
@@ -189,15 +188,15 @@ static inline int qdisc_restart(struct Qdisc *q)
 
 void __qdisc_run(struct Qdisc *q)
 {
-	unsigned long start_time = jiffies;
+	int quota = weight_p;
 
 	while (qdisc_restart(q)) {
 		/*
-		 * Postpone processing if
-		 * 1. another process needs the CPU;
-		 * 2. we've been doing it for too long.
+		 * Ordered by possible occurrence: Postpone processing if
+		 * 1. we've exceeded packet quota
+		 * 2. another process needs the CPU;
 		 */
-		if (need_resched() || jiffies != start_time) {
+		if (--quota <= 0 || need_resched()) {
 			__netif_schedule(q);
 			break;
 		}
@@ -242,18 +241,18 @@ static void dev_watchdog(unsigned long arg)
 				 * old device drivers set dev->trans_start
 				 */
 				trans_start = txq->trans_start ? : dev->trans_start;
-				if (netif_tx_queue_stopped(txq) &&
+				if (netif_xmit_stopped(txq) &&
 				    time_after(jiffies, (trans_start +
 							 dev->watchdog_timeo))) {
 					some_queue_timedout = 1;
+					txq->trans_timeout++;
 					break;
 				}
 			}
 
 			if (some_queue_timedout) {
-				char drivername[64];
 				WARN_ONCE(1, KERN_INFO "NETDEV WATCHDOG: %s (%s): transmit queue %u timed out\n",
-				       dev->name, netdev_drivername(dev, drivername, 64), i);
+				       dev->name, netdev_drivername(dev), i);
 				dev->netdev_ops->ndo_tx_timeout(dev);
 			}
 			if (!mod_timer(&dev->watchdog_timer,
@@ -512,7 +511,8 @@ static int pfifo_fast_dump(struct Qdisc *qdisc, struct sk_buff *skb)
 	struct tc_prio_qopt opt = { .bands = PFIFO_FAST_BANDS };
 
 	memcpy(&opt.priomap, prio2band, TC_PRIO_MAX + 1);
-	NLA_PUT(skb, TCA_OPTIONS, sizeof(opt), &opt);
+	if (nla_put(skb, TCA_OPTIONS, sizeof(opt), &opt))
+		goto nla_put_failure;
 	return skb->len;
 
 nla_put_failure:
@@ -815,9 +815,17 @@ static bool some_qdisc_is_busy(struct net_device *dev)
 	return false;
 }
 
+/**
+ * 	dev_deactivate_many - deactivate transmissions on several devices
+ * 	@head: list of devices to deactivate
+ *
+ *	This function returns only when all outstanding transmissions
+ *	have completed, unless all devices are in dismantle phase.
+ */
 void dev_deactivate_many(struct list_head *head)
 {
 	struct net_device *dev;
+	bool sync_needed = false;
 
 	list_for_each_entry(dev, head, unreg_list) {
 		netdev_for_each_tx_queue(dev, dev_deactivate_queue,
@@ -827,10 +835,15 @@ void dev_deactivate_many(struct list_head *head)
 					     &noop_qdisc);
 
 		dev_watchdog_down(dev);
+		sync_needed |= !dev->dismantle;
 	}
 
-	/* Wait for outstanding qdisc-less dev_queue_xmit calls. */
-	synchronize_rcu();
+	/* Wait for outstanding qdisc-less dev_queue_xmit calls.
+	 * This is avoided if all devices are in dismantle phase :
+	 * Caller will call synchronize_net() for us
+	 */
+	if (sync_needed)
+		synchronize_net();
 
 	/* Wait for outstanding qdisc_run calls. */
 	list_for_each_entry(dev, head, unreg_list)

@@ -38,7 +38,7 @@ long cifs_ioctl(struct file *filep, unsigned int command, unsigned long arg)
 	struct cifs_sb_info *cifs_sb;
 #ifdef CONFIG_CIFS_POSIX
 	struct cifsFileInfo *pSMBFile = filep->private_data;
-	struct cifsTconInfo *tcon;
+	struct cifs_tcon *tcon;
 	__u64	ExtAttrBits = 0;
 	__u64	ExtAttrMask = 0;
 	__u64   caps;
@@ -51,7 +51,15 @@ long cifs_ioctl(struct file *filep, unsigned int command, unsigned long arg)
 	cifs_sb = CIFS_SB(inode->i_sb);
 
 	switch (command) {
+		static bool warned = false;
 		case CIFS_IOC_CHECKUMOUNT:
+			if (!warned) {
+				warned = true;
+				cERROR(1, "the CIFS_IOC_CHECKMOUNT ioctl will "
+					  "be deprecated in 3.7. Please "
+					  "migrate away from the use of "
+					  "umount.cifs");
+			}
 			cFYI(1, "User unmount attempted");
 			if (cifs_sb->mnt_uid == current_uid())
 				rc = 0;

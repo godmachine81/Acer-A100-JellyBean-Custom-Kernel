@@ -27,7 +27,6 @@
 #include <linux/delay.h>
 #include <linux/fb.h>
 #include <linux/backlight.h>
-#include <linux/mfd/core.h>
 #include <linux/mfd/aat2870.h>
 
 struct aat2870_bl_driver_data {
@@ -128,7 +127,7 @@ static const struct backlight_ops aat2870_bl_ops = {
 
 static int aat2870_bl_probe(struct platform_device *pdev)
 {
-	struct aat2870_bl_platform_data *pdata = mfd_get_data(pdev);
+	struct aat2870_bl_platform_data *pdata = pdev->dev.platform_data;
 	struct aat2870_bl_driver_data *aat2870_bl;
 	struct backlight_device *bd;
 	struct backlight_properties props;
@@ -146,7 +145,9 @@ static int aat2870_bl_probe(struct platform_device *pdev)
 		goto out;
 	}
 
-	aat2870_bl = kzalloc(sizeof(struct aat2870_bl_driver_data), GFP_KERNEL);
+	aat2870_bl = devm_kzalloc(&pdev->dev,
+				  sizeof(struct aat2870_bl_driver_data),
+				  GFP_KERNEL);
 	if (!aat2870_bl) {
 		dev_err(&pdev->dev,
 			"Failed to allocate memory for aat2870 backlight\n");
@@ -159,11 +160,11 @@ static int aat2870_bl_probe(struct platform_device *pdev)
 	props.type = BACKLIGHT_RAW;
 	bd = backlight_device_register("aat2870-backlight", &pdev->dev,
 				       aat2870_bl, &aat2870_bl_ops, &props);
-	if (IS_ERR_OR_NULL(bd)) {
+	if (IS_ERR(bd)) {
 		dev_err(&pdev->dev,
 			"Failed allocate memory for backlight device\n");
 		ret = PTR_ERR(bd);
-		goto out_kfree;
+		goto out;
 	}
 
 	aat2870_bl->pdev = pdev;
@@ -200,8 +201,6 @@ static int aat2870_bl_probe(struct platform_device *pdev)
 
 out_bl_dev_unregister:
 	backlight_device_unregister(bd);
-out_kfree:
-	kfree(aat2870_bl);
 out:
 	return ret;
 }
@@ -216,7 +215,6 @@ static int aat2870_bl_remove(struct platform_device *pdev)
 	backlight_update_status(bd);
 
 	backlight_device_unregister(bd);
-	kfree(aat2870_bl);
 
 	return 0;
 }

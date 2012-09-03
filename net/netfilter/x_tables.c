@@ -14,6 +14,7 @@
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/socket.h>
 #include <linux/net.h>
 #include <linux/proc_fs.h>
@@ -762,8 +763,8 @@ void xt_compat_unlock(u_int8_t af)
 EXPORT_SYMBOL_GPL(xt_compat_unlock);
 #endif
 
-DEFINE_PER_CPU(struct xt_info_lock, xt_info_locks);
-EXPORT_PER_CPU_SYMBOL_GPL(xt_info_locks);
+DEFINE_PER_CPU(seqcount_t, xt_recseq);
+EXPORT_PER_CPU_SYMBOL_GPL(xt_recseq);
 
 static int xt_jumpstack_alloc(struct xt_table_info *i)
 {
@@ -776,12 +777,11 @@ static int xt_jumpstack_alloc(struct xt_table_info *i)
 
 	size = sizeof(void **) * nr_cpu_ids;
 	if (size > PAGE_SIZE)
-		i->jumpstack = vmalloc(size);
+		i->jumpstack = vzalloc(size);
 	else
-		i->jumpstack = kmalloc(size, GFP_KERNEL);
+		i->jumpstack = kzalloc(size, GFP_KERNEL);
 	if (i->jumpstack == NULL)
 		return -ENOMEM;
-	memset(i->jumpstack, 0, size);
 
 	i->stacksize *= xt_jumpstack_multiplier;
 	size = sizeof(void *) * i->stacksize;
@@ -1362,10 +1362,7 @@ static int __init xt_init(void)
 	int rv;
 
 	for_each_possible_cpu(i) {
-		struct xt_info_lock *lock = &per_cpu(xt_info_locks, i);
-
-		seqlock_init(&lock->lock);
-		lock->readers = 0;
+		seqcount_init(&per_cpu(xt_recseq, i));
 	}
 
 	xt = kmalloc(sizeof(struct xt_af) * NFPROTO_NUMPROTO, GFP_KERNEL);

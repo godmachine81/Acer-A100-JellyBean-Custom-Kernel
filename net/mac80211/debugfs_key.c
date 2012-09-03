@@ -30,7 +30,7 @@ static ssize_t key_##name##_read(struct file *file,			\
 #define KEY_OPS(name)							\
 static const struct file_operations key_ ##name## _ops = {		\
 	.read = key_##name##_read,					\
-	.open = mac80211_open_file_generic,				\
+	.open = simple_open,						\
 	.llseek = generic_file_llseek,					\
 }
 
@@ -45,7 +45,7 @@ static const struct file_operations key_ ##name## _ops = {		\
 #define KEY_CONF_OPS(name)						\
 static const struct file_operations key_ ##name## _ops = {		\
 	.read = key_conf_##name##_read,					\
-	.open = mac80211_open_file_generic,				\
+	.open = simple_open,						\
 	.llseek = generic_file_llseek,					\
 }
 
@@ -78,7 +78,7 @@ KEY_OPS(algorithm);
 static ssize_t key_tx_spec_read(struct file *file, char __user *userbuf,
 				size_t count, loff_t *ppos)
 {
-	const u8 *tpn;
+	u64 pn;
 	char buf[20];
 	int len;
 	struct ieee80211_key *key = file->private_data;
@@ -94,15 +94,16 @@ static ssize_t key_tx_spec_read(struct file *file, char __user *userbuf,
 				key->u.tkip.tx.iv16);
 		break;
 	case WLAN_CIPHER_SUITE_CCMP:
-		tpn = key->u.ccmp.tx_pn;
+		pn = atomic64_read(&key->u.ccmp.tx_pn);
 		len = scnprintf(buf, sizeof(buf), "%02x%02x%02x%02x%02x%02x\n",
-				tpn[0], tpn[1], tpn[2], tpn[3], tpn[4], tpn[5]);
+				(u8)(pn >> 40), (u8)(pn >> 32), (u8)(pn >> 24),
+				(u8)(pn >> 16), (u8)(pn >> 8), (u8)pn);
 		break;
 	case WLAN_CIPHER_SUITE_AES_CMAC:
-		tpn = key->u.aes_cmac.tx_pn;
+		pn = atomic64_read(&key->u.aes_cmac.tx_pn);
 		len = scnprintf(buf, sizeof(buf), "%02x%02x%02x%02x%02x%02x\n",
-				tpn[0], tpn[1], tpn[2], tpn[3], tpn[4],
-				tpn[5]);
+				(u8)(pn >> 40), (u8)(pn >> 32), (u8)(pn >> 24),
+				(u8)(pn >> 16), (u8)(pn >> 8), (u8)pn);
 		break;
 	default:
 		return 0;
@@ -224,9 +225,9 @@ KEY_OPS(key);
 			    key, &key_##name##_ops);
 
 void ieee80211_debugfs_key_add(struct ieee80211_key *key)
-  {
+{
 	static int keycount;
-	char buf[50];
+	char buf[100];
 	struct sta_info *sta;
 
 	if (!key->local->debugfs.keys)
@@ -241,16 +242,13 @@ void ieee80211_debugfs_key_add(struct ieee80211_key *key)
 	if (!key->debugfs.dir)
 		return;
 
-	rcu_read_lock();
-	sta = rcu_dereference(key->sta);
-	if (sta)
-		sprintf(buf, "../../stations/%pM", sta->sta.addr);
-	rcu_read_unlock();
-
-	/* using sta as a boolean is fine outside RCU lock */
-	if (sta)
+	sta = key->sta;
+	if (sta) {
+		sprintf(buf, "../../netdev:%s/stations/%pM",
+			sta->sdata->name, sta->sta.addr);
 		key->debugfs.stalink =
 			debugfs_create_symlink("station", key->debugfs.dir, buf);
+	}
 
 	DEBUGFS_ADD(keylen);
 	DEBUGFS_ADD(flags);
@@ -286,7 +284,8 @@ void ieee80211_debugfs_key_update_default(struct ieee80211_sub_if_data *sdata)
 	lockdep_assert_held(&sdata->local->key_mtx);
 
 	if (sdata->default_unicast_key) {
-		key = sdata->default_unicast_key;
+		key = key_mtx_dereference(sdata->local,
+					  sdata->default_unicast_key);
 		sprintf(buf, "../keys/%d", key->debugfs.cnt);
 		sdata->debugfs.default_unicast_key =
 			debugfs_create_symlink("default_unicast_key",
@@ -297,7 +296,8 @@ void ieee80211_debugfs_key_update_default(struct ieee80211_sub_if_data *sdata)
 	}
 
 	if (sdata->default_multicast_key) {
-		key = sdata->default_multicast_key;
+		key = key_mtx_dereference(sdata->local,
+					  sdata->default_multicast_key);
 		sprintf(buf, "../keys/%d", key->debugfs.cnt);
 		sdata->debugfs.default_multicast_key =
 			debugfs_create_symlink("default_multicast_key",
@@ -316,9 +316,8 @@ void ieee80211_debugfs_key_add_mgmt_default(struct ieee80211_sub_if_data *sdata)
 	if (!sdata->debugfs.dir)
 		return;
 
-	/* this is running under the key lock */
-
-	key = sdata->default_mgmt_key;
+	key = key_mtx_dereference(sdata->local,
+				  sdata->default_mgmt_key);
 	if (key) {
 		sprintf(buf, "../keys/%d", key->debugfs.cnt);
 		sdata->debugfs.default_mgmt_key =

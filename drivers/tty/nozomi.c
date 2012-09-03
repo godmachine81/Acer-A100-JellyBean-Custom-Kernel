@@ -61,8 +61,7 @@
 #include <linux/delay.h>
 
 
-#define VERSION_STRING DRIVER_DESC " 2.1d (build date: " \
-					__DATE__ " " __TIME__ ")"
+#define VERSION_STRING DRIVER_DESC " 2.1d"
 
 /*    Macros definitions */
 
@@ -364,8 +363,6 @@ struct port {
 	u8 toggle_ul;
 	u16 token_dl;
 
-	/* mutex to ensure one access patch to this port */
-	struct mutex tty_sem;
 	wait_queue_head_t tty_wait;
 	struct async_icount tty_icount;
 
@@ -1431,8 +1428,8 @@ static int __devinit nozomi_card_init(struct pci_dev *pdev,
 	}
 
 	for (i = PORT_MDM; i < MAX_PORT; i++) {
-		if (kfifo_alloc(&dc->port[i].fifo_ul,
-		      FIFO_BUFFER_SIZE_UL, GFP_ATOMIC)) {
+		if (kfifo_alloc(&dc->port[i].fifo_ul, FIFO_BUFFER_SIZE_UL,
+					GFP_KERNEL)) {
 			dev_err(&pdev->dev,
 					"Could not allocate kfifo buffer\n");
 			ret = -ENOMEM;
@@ -1474,7 +1471,6 @@ static int __devinit nozomi_card_init(struct pci_dev *pdev,
 		struct device *tty_dev;
 		struct port *port = &dc->port[i];
 		port->dc = dc;
-		mutex_init(&port->tty_sem);
 		tty_port_init(&port->port);
 		port->port.ops = &noz_tty_port_ops;
 		tty_dev = tty_register_device(ntty_driver, dc->index_start + i,
@@ -1606,13 +1602,9 @@ static int ntty_install(struct tty_driver *driver, struct tty_struct *tty)
 	int ret;
 	if (!port || !dc || dc->state != NOZOMI_STATE_READY)
 		return -ENODEV;
-	ret = tty_init_termios(tty);
-	if (ret == 0) {
-		tty_driver_kref_get(driver);
-		tty->count++;
+	ret = tty_standard_install(driver, tty);
+	if (ret == 0)
 		tty->driver_data = port;
-		driver->ttys[tty->index] = tty;
-	}
 	return ret;
 }
 
@@ -1688,13 +1680,6 @@ static int ntty_write(struct tty_struct *tty, const unsigned char *buffer,
 	if (!dc || !port)
 		return -ENODEV;
 
-	mutex_lock(&port->tty_sem);
-
-	if (unlikely(!port->port.count)) {
-		DBG1(" ");
-		goto exit;
-	}
-
 	rval = kfifo_in(&port->fifo_ul, (unsigned char *)buffer, count);
 
 	/* notify card */
@@ -1719,7 +1704,6 @@ static int ntty_write(struct tty_struct *tty, const unsigned char *buffer,
 	spin_unlock_irqrestore(&dc->spin_mutex, flags);
 
 exit:
-	mutex_unlock(&port->tty_sem);
 	return rval;
 }
 
@@ -1738,12 +1722,9 @@ static int ntty_write_room(struct tty_struct *tty)
 	int room = 4096;
 	const struct nozomi *dc = get_dc_by_tty(tty);
 
-	if (dc) {
-		mutex_lock(&port->tty_sem);
-		if (port->port.count)
-			room = kfifo_avail(&port->fifo_ul);
-		mutex_unlock(&port->tty_sem);
-	}
+	if (dc)
+		room = kfifo_avail(&port->fifo_ul);
+
 	return room;
 }
 
@@ -1889,11 +1870,6 @@ static s32 ntty_chars_in_buffer(struct tty_struct *tty)
 		goto exit_in_buffer;
 	}
 
-	if (unlikely(!port->port.count)) {
-		dev_err(&dc->pdev->dev, "No tty open?\n");
-		goto exit_in_buffer;
-	}
-
 	rval = kfifo_len(&port->fifo_ul);
 
 exit_in_buffer:
@@ -1940,7 +1916,6 @@ static __init int nozomi_init(void)
 	if (!ntty_driver)
 		return -ENOMEM;
 
-	ntty_driver->owner = THIS_MODULE;
 	ntty_driver->driver_name = NOZOMI_NAME_TTY;
 	ntty_driver->name = "noz";
 	ntty_driver->major = 0;

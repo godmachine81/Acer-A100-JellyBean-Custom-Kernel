@@ -1101,11 +1101,9 @@ static int __devinit broadsheetfb_probe(struct platform_device *dev)
 
 	videomemorysize = roundup((dpyw*dpyh), PAGE_SIZE);
 
-	videomemory = vmalloc(videomemorysize);
+	videomemory = vzalloc(videomemorysize);
 	if (!videomemory)
 		goto err_fb_rel;
-
-	memset(videomemory, 0, videomemorysize);
 
 	info->screen_base = (char *)videomemory;
 	info->fbops = &broadsheetfb_ops;
@@ -1213,7 +1211,7 @@ static int __devexit broadsheetfb_remove(struct platform_device *dev)
 
 static struct platform_driver broadsheetfb_driver = {
 	.probe	= broadsheetfb_probe,
-	.remove = broadsheetfb_remove,
+	.remove = __devexit_p(broadsheetfb_remove),
 	.driver	= {
 		.owner	= THIS_MODULE,
 		.name	= "broadsheetfb",

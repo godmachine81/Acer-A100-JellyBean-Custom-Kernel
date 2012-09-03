@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2009-2010  Realtek Corporation.
+ * Copyright(c) 2009-2012  Realtek Corporation.
  *
  * Tmis program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -24,6 +24,7 @@
  * Hsinchu 300, Taiwan.
  *
  * Larry Finger <Larry.Finger@lwfinger.net>
+ *
  *****************************************************************************/
 
 #ifndef __RTL_CORE_H__
@@ -39,4 +40,6 @@
 #define RTL_SUPPORTED_CTRL_FILTER	0xFF
 
 extern const struct ieee80211_ops rtl_ops;
+void rtl_fw_cb(const struct firmware *firmware, void *context);
+
 #endif

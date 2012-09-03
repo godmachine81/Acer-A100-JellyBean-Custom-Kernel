@@ -1,5 +1,7 @@
 #include <linux/ieee80211.h>
+#include <linux/export.h>
 #include <net/cfg80211.h>
+#include "nl80211.h"
 #include "core.h"
 
 /* Default values, timeouts in ms */
@@ -11,13 +13,17 @@
 #define MESH_HOLD_T 		100
 
 #define MESH_PATH_TIMEOUT	5000
+#define MESH_RANN_INTERVAL      5000
 
 /*
  * Minimum interval between two consecutive PREQs originated by the same
  * interface
  */
 #define MESH_PREQ_MIN_INT	10
+#define MESH_PERR_MIN_INT	100
 #define MESH_DIAM_TRAVERSAL_TIME 50
+
+#define MESH_RSSI_THRESHOLD	0
 
 /*
  * A path will be refreshed if it is used PATH_REFRESH_TIME milliseconds
@@ -32,6 +38,7 @@
 
 #define MESH_MAX_PREQ_RETRIES	4
 
+#define MESH_SYNC_NEIGHBOR_OFFSET_MAX 50
 
 const struct mesh_config default_mesh_config = {
 	.dot11MeshRetryTimeout = MESH_RET_T,
@@ -42,19 +49,28 @@ const struct mesh_config default_mesh_config = {
 	.element_ttl = MESH_DEFAULT_ELEMENT_TTL,
 	.auto_open_plinks = true,
 	.dot11MeshMaxPeerLinks = MESH_MAX_ESTAB_PLINKS,
+	.dot11MeshNbrOffsetMaxNeighbor = MESH_SYNC_NEIGHBOR_OFFSET_MAX,
 	.dot11MeshHWMPactivePathTimeout = MESH_PATH_TIMEOUT,
 	.dot11MeshHWMPpreqMinInterval = MESH_PREQ_MIN_INT,
+	.dot11MeshHWMPperrMinInterval = MESH_PERR_MIN_INT,
 	.dot11MeshHWMPnetDiameterTraversalTime = MESH_DIAM_TRAVERSAL_TIME,
 	.dot11MeshHWMPmaxPREQretries = MESH_MAX_PREQ_RETRIES,
 	.path_refresh_time = MESH_PATH_REFRESH_TIME,
 	.min_discovery_timeout = MESH_MIN_DISCOVERY_TIMEOUT,
+	.dot11MeshHWMPRannInterval = MESH_RANN_INTERVAL,
+	.dot11MeshGateAnnouncementProtocol = false,
+	.dot11MeshForwarding = true,
+	.rssi_threshold = MESH_RSSI_THRESHOLD,
+	.ht_opmode = IEEE80211_HT_OP_MODE_PROTECTION_NONHT_MIXED,
 };
 
 const struct mesh_setup default_mesh_setup = {
+	.sync_method = IEEE80211_SYNC_METHOD_NEIGHBOR_OFFSET,
 	.path_sel_proto = IEEE80211_PATH_PROTOCOL_HWMP,
 	.path_metric = IEEE80211_PATH_METRIC_AIRTIME,
-	.vendor_ie = NULL,
-	.vendor_ie_len = 0,
+	.ie = NULL,
+	.ie_len = 0,
+	.is_secure = false,
 };
 
 int __cfg80211_join_mesh(struct cfg80211_registered_device *rdev,
@@ -70,6 +86,10 @@ int __cfg80211_join_mesh(struct cfg80211_registered_device *rdev,
 	ASSERT_WDEV_LOCK(wdev);
 
 	if (dev->ieee80211_ptr->iftype != NL80211_IFTYPE_MESH_POINT)
+		return -EOPNOTSUPP;
+
+	if (!(rdev->wiphy.flags & WIPHY_FLAG_MESH_AUTH) &&
+	      setup->is_secure)
 		return -EOPNOTSUPP;
 
 	if (wdev->mesh_id_len)
@@ -104,6 +124,19 @@ int cfg80211_join_mesh(struct cfg80211_registered_device *rdev,
 
 	return err;
 }
+
+void cfg80211_notify_new_peer_candidate(struct net_device *dev,
+		const u8 *macaddr, const u8* ie, u8 ie_len, gfp_t gfp)
+{
+	struct wireless_dev *wdev = dev->ieee80211_ptr;
+
+	if (WARN_ON(wdev->iftype != NL80211_IFTYPE_MESH_POINT))
+		return;
+
+	nl80211_send_new_peer_candidate(wiphy_to_dev(wdev->wiphy), dev,
+			macaddr, ie, ie_len, gfp);
+}
+EXPORT_SYMBOL(cfg80211_notify_new_peer_candidate);
 
 static int __cfg80211_leave_mesh(struct cfg80211_registered_device *rdev,
 				 struct net_device *dev)

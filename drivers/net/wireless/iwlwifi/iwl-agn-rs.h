@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2003 - 2010 Intel Corporation. All rights reserved.
+ * Copyright(c) 2003 - 2012 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -27,6 +27,11 @@
 #ifndef __iwl_agn_rs_h__
 #define __iwl_agn_rs_h__
 
+#include <net/mac80211.h>
+
+#include "iwl-commands.h"
+#include "iwl-config.h"
+
 struct iwl_rate_info {
 	u8 plcp;	/* uCode API:  IWL_RATE_6M_PLCP, etc. */
 	u8 plcp_siso;	/* uCode API:  IWL_RATE_SISO_6M_PLCP, etc. */
@@ -40,20 +45,6 @@ struct iwl_rate_info {
 	u8 prev_rs_tgg;  /* previous rate used in TGG rs algo */
 	u8 next_rs_tgg;  /* next rate used in TGG rs algo */
 };
-
-struct iwl3945_rate_info {
-	u8 plcp;		/* uCode API:  IWL_RATE_6M_PLCP, etc. */
-	u8 ieee;		/* MAC header:  IWL_RATE_6M_IEEE, etc. */
-	u8 prev_ieee;		/* previous rate in IEEE speeds */
-	u8 next_ieee;		/* next rate in IEEE speeds */
-	u8 prev_rs;		/* previous rate used in rs algo */
-	u8 next_rs;		/* next rate used in rs algo */
-	u8 prev_rs_tgg;		/* previous rate used in TGG rs algo */
-	u8 next_rs_tgg;		/* next rate used in TGG rs algo */
-	u8 table_rs_index;	/* index in rate scale table cmd */
-	u8 prev_table_rs;	/* prev in rate table cmd */
-};
-
 
 /*
  * These serve as indexes into
@@ -75,7 +66,6 @@ enum {
 	IWL_RATE_60M_INDEX,
 	IWL_RATE_COUNT, /*FIXME:RS:change to IWL_RATE_INDEX_COUNT,*/
 	IWL_RATE_COUNT_LEGACY = IWL_RATE_COUNT - 1,	/* Excluding 60M */
-	IWL_RATE_COUNT_3945 = IWL_RATE_COUNT - 1,
 	IWL_RATE_INVM_INDEX = IWL_RATE_COUNT,
 	IWL_RATE_INVALID = IWL_RATE_COUNT,
 };
@@ -98,7 +88,6 @@ enum {
 
 enum {
 	IWL_FIRST_OFDM_RATE = IWL_RATE_6M_INDEX,
-	IWL39_LAST_OFDM_RATE = IWL_RATE_54M_INDEX,
 	IWL_LAST_OFDM_RATE = IWL_RATE_60M_INDEX,
 	IWL_FIRST_CCK_RATE = IWL_RATE_1M_INDEX,
 	IWL_LAST_CCK_RATE = IWL_RATE_11M_INDEX,
@@ -186,34 +175,7 @@ enum {
 	IWL_RATE_11M_IEEE = 22,
 };
 
-#define IWL_CCK_BASIC_RATES_MASK    \
-       (IWL_RATE_1M_MASK          | \
-	IWL_RATE_2M_MASK)
-
-#define IWL_CCK_RATES_MASK          \
-       (IWL_CCK_BASIC_RATES_MASK  | \
-	IWL_RATE_5M_MASK          | \
-	IWL_RATE_11M_MASK)
-
-#define IWL_OFDM_BASIC_RATES_MASK   \
-	(IWL_RATE_6M_MASK         | \
-	IWL_RATE_12M_MASK         | \
-	IWL_RATE_24M_MASK)
-
-#define IWL_OFDM_RATES_MASK         \
-       (IWL_OFDM_BASIC_RATES_MASK | \
-	IWL_RATE_9M_MASK          | \
-	IWL_RATE_18M_MASK         | \
-	IWL_RATE_36M_MASK         | \
-	IWL_RATE_48M_MASK         | \
-	IWL_RATE_54M_MASK)
-
-#define IWL_BASIC_RATES_MASK         \
-	(IWL_OFDM_BASIC_RATES_MASK | \
-	 IWL_CCK_BASIC_RATES_MASK)
-
 #define IWL_RATES_MASK ((1 << IWL_RATE_COUNT) - 1)
-#define IWL_RATES_MASK_3945 ((1 << IWL_RATE_COUNT_3945) - 1)
 
 #define IWL_INVALID_VALUE    -1
 
@@ -294,7 +256,6 @@ enum {
 #define TID_QUEUE_CELL_SPACING	50	/*mS */
 #define TID_QUEUE_MAX_SIZE	20
 #define TID_ROUND_VALUE		5	/* mS */
-#define TID_MAX_LOAD_COUNT	8
 
 #define TID_MAX_TIME_DIFF ((TID_QUEUE_MAX_SIZE - 1) * TID_QUEUE_CELL_SPACING)
 #define TIME_WRAP_AROUND(x, y) (((y) > (x)) ? (y) - (x) : (0-(x)) + (y))
@@ -319,15 +280,6 @@ enum iwl_table_type {
 #define is_Ht(tbl) (is_siso(tbl) || is_mimo(tbl))
 #define is_a_band(tbl) ((tbl) == LQ_A)
 #define is_g_and(tbl) ((tbl) == LQ_G)
-
-#define	ANT_NONE	0x0
-#define	ANT_A		BIT(0)
-#define	ANT_B		BIT(1)
-#define	ANT_AB		(ANT_A | ANT_B)
-#define ANT_C		BIT(2)
-#define	ANT_AC		(ANT_A | ANT_C)
-#define ANT_BC		(ANT_B | ANT_C)
-#define ANT_ABC		(ANT_AB | ANT_C)
 
 #define IWL_MAX_MCS_DISPLAY_SIZE	12
 
@@ -415,7 +367,7 @@ struct iwl_lq_sta {
 
 	struct iwl_link_quality_cmd lq;
 	struct iwl_scale_tbl_info lq_info[LQ_SIZE]; /* "active", "search" */
-	struct iwl_traffic_load load[TID_MAX_LOAD_COUNT];
+	struct iwl_traffic_load load[IWL_MAX_TID_COUNT];
 	u8 tx_agg_tid_en;
 #ifdef CONFIG_MAC80211_DEBUGFS
 	struct dentry *rs_sta_dbgfs_scale_table_file;
@@ -453,19 +405,9 @@ static inline u8 first_antenna(u8 mask)
 }
 
 
-/**
- * iwl3945_rate_scale_init - Initialize the rate scale table based on assoc info
- *
- * The specific throughput table used is based on the type of network
- * the associated with, including A, B, G, and G w/ TGG protection
- */
-extern void iwl3945_rate_scale_init(struct ieee80211_hw *hw, s32 sta_id);
-
 /* Initialize station's rate scaling information after adding station */
 extern void iwl_rs_rate_init(struct iwl_priv *priv,
 			     struct ieee80211_sta *sta, u8 sta_id);
-extern void iwl3945_rs_rate_init(struct iwl_priv *priv,
-				 struct ieee80211_sta *sta, u8 sta_id);
 
 /**
  * iwl_rate_control_register - Register the rate control algorithm callbacks
@@ -478,7 +420,6 @@ extern void iwl3945_rs_rate_init(struct iwl_priv *priv,
  *
  */
 extern int iwlagn_rate_control_register(void);
-extern int iwl3945_rate_control_register(void);
 
 /**
  * iwl_rate_control_unregister - Unregister the rate control callbacks
@@ -487,6 +428,5 @@ extern int iwl3945_rate_control_register(void);
  * the driver is unloaded.
  */
 extern void iwlagn_rate_control_unregister(void);
-extern void iwl3945_rate_control_unregister(void);
 
 #endif /* __iwl_agn__rs__ */

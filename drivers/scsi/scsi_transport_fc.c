@@ -313,7 +313,7 @@ static void fc_scsi_scan_rport(struct work_struct *work);
 #define FC_STARGET_NUM_ATTRS 	3
 #define FC_RPORT_NUM_ATTRS	10
 #define FC_VPORT_NUM_ATTRS	9
-#define FC_HOST_NUM_ATTRS	22
+#define FC_HOST_NUM_ATTRS	29
 
 struct fc_internal {
 	struct scsi_transport_template t;
@@ -399,6 +399,20 @@ static int fc_host_setup(struct transport_container *tc, struct device *dev,
 	fc_host->max_npiv_vports = 0;
 	memset(fc_host->serial_number, 0,
 		sizeof(fc_host->serial_number));
+	memset(fc_host->manufacturer, 0,
+		sizeof(fc_host->manufacturer));
+	memset(fc_host->model, 0,
+		sizeof(fc_host->model));
+	memset(fc_host->model_description, 0,
+		sizeof(fc_host->model_description));
+	memset(fc_host->hardware_version, 0,
+		sizeof(fc_host->hardware_version));
+	memset(fc_host->driver_version, 0,
+		sizeof(fc_host->driver_version));
+	memset(fc_host->firmware_version, 0,
+		sizeof(fc_host->firmware_version));
+	memset(fc_host->optionrom_version, 0,
+		sizeof(fc_host->optionrom_version));
 
 	fc_host->port_id = -1;
 	fc_host->port_type = FC_PORTTYPE_UNKNOWN;
@@ -422,8 +436,7 @@ static int fc_host_setup(struct transport_container *tc, struct device *dev,
 
 	snprintf(fc_host->work_q_name, sizeof(fc_host->work_q_name),
 		 "fc_wq_%d", shost->host_no);
-	fc_host->work_q = create_singlethread_workqueue(
-					fc_host->work_q_name);
+	fc_host->work_q = alloc_workqueue(fc_host->work_q_name, 0, 0);
 	if (!fc_host->work_q)
 		return -ENOMEM;
 
@@ -431,8 +444,8 @@ static int fc_host_setup(struct transport_container *tc, struct device *dev,
 	snprintf(fc_host->devloss_work_q_name,
 		 sizeof(fc_host->devloss_work_q_name),
 		 "fc_dl_%d", shost->host_no);
-	fc_host->devloss_work_q = create_singlethread_workqueue(
-					fc_host->devloss_work_q_name);
+	fc_host->devloss_work_q =
+			alloc_workqueue(fc_host->devloss_work_q_name, 0, 0);
 	if (!fc_host->devloss_work_q) {
 		destroy_workqueue(fc_host->work_q);
 		fc_host->work_q = NULL;
@@ -1514,6 +1527,13 @@ fc_private_host_rd_attr_cast(permanent_port_name, "0x%llx\n", 20,
 fc_private_host_rd_attr(maxframe_size, "%u bytes\n", 20);
 fc_private_host_rd_attr(max_npiv_vports, "%u\n", 20);
 fc_private_host_rd_attr(serial_number, "%s\n", (FC_SERIAL_NUMBER_SIZE +1));
+fc_private_host_rd_attr(manufacturer, "%s\n", FC_SERIAL_NUMBER_SIZE + 1);
+fc_private_host_rd_attr(model, "%s\n", FC_SYMBOLIC_NAME_SIZE + 1);
+fc_private_host_rd_attr(model_description, "%s\n", FC_SYMBOLIC_NAME_SIZE + 1);
+fc_private_host_rd_attr(hardware_version, "%s\n", FC_VERSION_STRING_SIZE + 1);
+fc_private_host_rd_attr(driver_version, "%s\n", FC_VERSION_STRING_SIZE + 1);
+fc_private_host_rd_attr(firmware_version, "%s\n", FC_VERSION_STRING_SIZE + 1);
+fc_private_host_rd_attr(optionrom_version, "%s\n", FC_VERSION_STRING_SIZE + 1);
 
 
 /* Dynamic Host Attributes */
@@ -2209,6 +2229,13 @@ fc_attach_transport(struct fc_function_template *ft)
 		SETUP_HOST_ATTRIBUTE_RD_NS(npiv_vports_inuse);
 	}
 	SETUP_HOST_ATTRIBUTE_RD(serial_number);
+	SETUP_HOST_ATTRIBUTE_RD(manufacturer);
+	SETUP_HOST_ATTRIBUTE_RD(model);
+	SETUP_HOST_ATTRIBUTE_RD(model_description);
+	SETUP_HOST_ATTRIBUTE_RD(hardware_version);
+	SETUP_HOST_ATTRIBUTE_RD(driver_version);
+	SETUP_HOST_ATTRIBUTE_RD(firmware_version);
+	SETUP_HOST_ATTRIBUTE_RD(optionrom_version);
 
 	SETUP_HOST_ATTRIBUTE_RD(port_id);
 	SETUP_HOST_ATTRIBUTE_RD(port_type);
@@ -2489,14 +2516,14 @@ fc_rport_final_delete(struct work_struct *work)
 	unsigned long flags;
 	int do_callback = 0;
 
+	fc_terminate_rport_io(rport);
+
 	/*
 	 * if a scan is pending, flush the SCSI Host work_q so that
 	 * that we can reclaim the rport scan work element.
 	 */
 	if (rport->flags & FC_RPORT_SCAN_PENDING)
 		scsi_flush_work(shost);
-
-	fc_terminate_rport_io(rport);
 
 	/*
 	 * Cancel any outstanding timers. These should really exist
@@ -2781,17 +2808,20 @@ fc_remote_port_add(struct Scsi_Host *shost, int channel,
 						  FC_RPORT_DEVLOSS_PENDING |
 						  FC_RPORT_DEVLOSS_CALLBK_DONE);
 
+				spin_unlock_irqrestore(shost->host_lock, flags);
+
 				/* if target, initiate a scan */
 				if (rport->scsi_target_id != -1) {
+					scsi_target_unblock(&rport->dev);
+
+					spin_lock_irqsave(shost->host_lock,
+							  flags);
 					rport->flags |= FC_RPORT_SCAN_PENDING;
 					scsi_queue_work(shost,
 							&rport->scan_work);
 					spin_unlock_irqrestore(shost->host_lock,
 							flags);
-					scsi_target_unblock(&rport->dev);
-				} else
-					spin_unlock_irqrestore(shost->host_lock,
-							flags);
+				}
 
 				fc_bsg_goose_queue(rport);
 
@@ -2849,16 +2879,17 @@ fc_remote_port_add(struct Scsi_Host *shost, int channel,
 			if (fci->f->dd_fcrport_size)
 				memset(rport->dd_data, 0,
 						fci->f->dd_fcrport_size);
+			spin_unlock_irqrestore(shost->host_lock, flags);
 
-			if (rport->roles & FC_PORT_ROLE_FCP_TARGET) {
+			if (ids->roles & FC_PORT_ROLE_FCP_TARGET) {
+				scsi_target_unblock(&rport->dev);
+
 				/* initiate a scan of the target */
+				spin_lock_irqsave(shost->host_lock, flags);
 				rport->flags |= FC_RPORT_SCAN_PENDING;
 				scsi_queue_work(shost, &rport->scan_work);
 				spin_unlock_irqrestore(shost->host_lock, flags);
-				scsi_target_unblock(&rport->dev);
-			} else
-				spin_unlock_irqrestore(shost->host_lock, flags);
-
+			}
 			return rport;
 		}
 	}
@@ -3049,18 +3080,19 @@ fc_remote_port_rolechg(struct fc_rport  *rport, u32 roles)
 
 		spin_lock_irqsave(shost->host_lock, flags);
 		rport->flags &= ~(FC_RPORT_FAST_FAIL_TIMEDOUT |
-				  FC_RPORT_DEVLOSS_PENDING);
+				  FC_RPORT_DEVLOSS_PENDING |
+				  FC_RPORT_DEVLOSS_CALLBK_DONE);
 		spin_unlock_irqrestore(shost->host_lock, flags);
 
 		/* ensure any stgt delete functions are done */
 		fc_flush_work(shost);
 
+		scsi_target_unblock(&rport->dev);
 		/* initiate a scan of the target */
 		spin_lock_irqsave(shost->host_lock, flags);
 		rport->flags |= FC_RPORT_SCAN_PENDING;
 		scsi_queue_work(shost, &rport->scan_work);
 		spin_unlock_irqrestore(shost->host_lock, flags);
-		scsi_target_unblock(&rport->dev);
 	}
 }
 EXPORT_SYMBOL(fc_remote_port_rolechg);

@@ -81,6 +81,7 @@ static const struct cx18_api_info api_info[] = {
 	API_ENTRY(CPU, CX18_CPU_SET_SLICED_VBI_PARAM,           0),
 	API_ENTRY(CPU, CX18_CPU_SET_USERDATA_PLACE_HOLDER,      0),
 	API_ENTRY(CPU, CX18_CPU_GET_ENC_PTS,                    0),
+	API_ENTRY(CPU, CX18_CPU_SET_VFC_PARAM,                  0),
 	API_ENTRY(CPU, CX18_CPU_DE_SET_MDL_ACK,			0),
 	API_ENTRY(CPU, CX18_CPU_DE_SET_MDL,			API_FAST),
 	API_ENTRY(CPU, CX18_CPU_DE_RELEASE_MDL,			API_SLOW),
@@ -158,6 +159,60 @@ static void cx18_mdl_send_to_dvb(struct cx18_stream *s, struct cx18_mdl *mdl)
 	}
 }
 
+static void cx18_mdl_send_to_videobuf(struct cx18_stream *s,
+	struct cx18_mdl *mdl)
+{
+	struct cx18_videobuf_buffer *vb_buf;
+	struct cx18_buffer *buf;
+	u8 *p;
+	u32 offset = 0;
+	int dispatch = 0;
+
+	if (mdl->bytesused == 0)
+		return;
+
+	/* Acquire a videobuf buffer, clone to and and release it */
+	spin_lock(&s->vb_lock);
+	if (list_empty(&s->vb_capture))
+		goto out;
+
+	vb_buf = list_first_entry(&s->vb_capture, struct cx18_videobuf_buffer,
+		vb.queue);
+
+	p = videobuf_to_vmalloc(&vb_buf->vb);
+	if (!p)
+		goto out;
+
+	offset = vb_buf->bytes_used;
+	list_for_each_entry(buf, &mdl->buf_list, list) {
+		if (buf->bytesused == 0)
+			break;
+
+		if ((offset + buf->bytesused) <= vb_buf->vb.bsize) {
+			memcpy(p + offset, buf->buf, buf->bytesused);
+			offset += buf->bytesused;
+			vb_buf->bytes_used += buf->bytesused;
+		}
+	}
+
+	/* If we've filled the buffer as per the callers res then dispatch it */
+	if (vb_buf->bytes_used >= s->vb_bytes_per_frame) {
+		dispatch = 1;
+		vb_buf->bytes_used = 0;
+	}
+
+	if (dispatch) {
+		vb_buf->vb.ts = ktime_to_timeval(ktime_get());
+		list_del(&vb_buf->vb.queue);
+		vb_buf->vb.state = VIDEOBUF_DONE;
+		wake_up(&vb_buf->vb.done);
+	}
+
+	mod_timer(&s->vb_timeout, msecs_to_jiffies(2000) + jiffies);
+
+out:
+	spin_unlock(&s->vb_lock);
+}
 
 static void cx18_mdl_send_to_alsa(struct cx18 *cx, struct cx18_stream *s,
 				  struct cx18_mdl *mdl)
@@ -263,6 +318,9 @@ static void epu_dma_done(struct cx18 *cx, struct cx18_in_work_order *order)
 			} else {
 				cx18_enqueue(s, mdl, &s->q_full);
 			}
+		} else if (s->type == CX18_ENC_STREAM_TYPE_YUV) {
+			cx18_mdl_send_to_videobuf(s, mdl);
+			cx18_enqueue(s, mdl, &s->q_free);
 		} else {
 			cx18_enqueue(s, mdl, &s->q_full);
 			if (s->type == CX18_ENC_STREAM_TYPE_IDX)
@@ -376,6 +434,7 @@ static int epu_dma_done_irq(struct cx18 *cx, struct cx18_in_work_order *order)
 {
 	u32 handle, mdl_ack_offset, mdl_ack_count;
 	struct cx18_mailbox *mb;
+	int i;
 
 	mb = &order->mb;
 	handle = mb->args[0];
@@ -389,8 +448,9 @@ static int epu_dma_done_irq(struct cx18 *cx, struct cx18_in_work_order *order)
 		return -1;
 	}
 
-	cx18_memcpy_fromio(cx, order->mdl_ack, cx->enc_mem + mdl_ack_offset,
-			   sizeof(struct cx18_mdl_ack) * mdl_ack_count);
+	for (i = 0; i < sizeof(struct cx18_mdl_ack) * mdl_ack_count; i += sizeof(u32))
+		((u32 *)order->mdl_ack)[i / sizeof(u32)] =
+			cx18_readl(cx, cx->enc_mem + mdl_ack_offset + i);
 
 	if ((order->flags & CX18_F_EWO_MB_STALE) == 0)
 		mb_ack_irq(cx, order);
@@ -480,6 +540,7 @@ void cx18_api_epu_cmd_irq(struct cx18 *cx, int rpu)
 	struct cx18_mailbox *order_mb;
 	struct cx18_in_work_order *order;
 	int submit;
+	int i;
 
 	switch (rpu) {
 	case CPU:
@@ -504,10 +565,12 @@ void cx18_api_epu_cmd_irq(struct cx18 *cx, int rpu)
 	order_mb = &order->mb;
 
 	/* mb->cmd and mb->args[0] through mb->args[2] */
-	cx18_memcpy_fromio(cx, &order_mb->cmd, &mb->cmd, 4 * sizeof(u32));
+	for (i = 0; i < 4; i++)
+		(&order_mb->cmd)[i] = cx18_readl(cx, &mb->cmd + i);
+
 	/* mb->request and mb->ack.  N.B. we want to read mb->ack last */
-	cx18_memcpy_fromio(cx, &order_mb->request, &mb->request,
-			   2 * sizeof(u32));
+	for (i = 0; i < 2; i++)
+		(&order_mb->request)[i] = cx18_readl(cx, &mb->request + i);
 
 	if (order_mb->request == order_mb->ack) {
 		CX18_DEBUG_WARN("Possibly falling behind: %s self-ack'ed our "
@@ -537,9 +600,8 @@ void cx18_api_epu_cmd_irq(struct cx18 *cx, int rpu)
 static int cx18_api_call(struct cx18 *cx, u32 cmd, int args, u32 data[])
 {
 	const struct cx18_api_info *info = find_api_info(cmd);
-	u32 state, irq, req, ack, err;
+	u32 irq, req, ack, err;
 	struct cx18_mailbox __iomem *mb;
-	u32 __iomem *xpu_state;
 	wait_queue_head_t *waitq;
 	struct mutex *mb_lock;
 	unsigned long int t0, timeout, ret;
@@ -570,14 +632,12 @@ static int cx18_api_call(struct cx18 *cx, u32 cmd, int args, u32 data[])
 		mb_lock = &cx->epu2apu_mb_lock;
 		irq = IRQ_EPU_TO_APU;
 		mb = &cx->scb->epu2apu_mb;
-		xpu_state = &cx->scb->apu_state;
 		break;
 	case CPU:
 		waitq = &cx->mb_cpu_waitq;
 		mb_lock = &cx->epu2cpu_mb_lock;
 		irq = IRQ_EPU_TO_CPU;
 		mb = &cx->scb->epu2cpu_mb;
-		xpu_state = &cx->scb->cpu_state;
 		break;
 	default:
 		CX18_WARN("Unknown RPU (%d) for API call\n", info->rpu);
@@ -595,7 +655,6 @@ static int cx18_api_call(struct cx18 *cx, u32 cmd, int args, u32 data[])
 	 * by a signal, we may get here and find a busy mailbox.  After waiting,
 	 * mark it "not busy" from our end, if the XPU hasn't ack'ed it still.
 	 */
-	state = cx18_readl(cx, xpu_state);
 	req = cx18_readl(cx, &mb->request);
 	timeout = msecs_to_jiffies(10);
 	ret = wait_event_timeout(*waitq,

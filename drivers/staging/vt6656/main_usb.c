@@ -611,16 +611,9 @@ static BOOL device_init_registers(PSDevice pDevice, DEVICE_INIT_TYPE InitType)
 
         // if exist SW network address, use SW network address.
 
-        DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Network address = %02x-%02x-%02x=%02x-%02x-%02x\n",
-            pDevice->abyCurrentNetAddr[0],
-            pDevice->abyCurrentNetAddr[1],
-            pDevice->abyCurrentNetAddr[2],
-            pDevice->abyCurrentNetAddr[3],
-            pDevice->abyCurrentNetAddr[4],
-            pDevice->abyCurrentNetAddr[5]);
+	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Network address = %pM\n",
+		pDevice->abyCurrentNetAddr);
     }
-
-
 
     // Set BB and packet type at the same time.
     // Set Short Slot Time, xIFS, and RSPINF.
@@ -709,7 +702,7 @@ static BOOL device_release_WPADEV(PSDevice pDevice)
 	        if(ii>20)
 		  break;
               }
-           };
+           }
     return TRUE;
 }
 
@@ -753,7 +746,7 @@ static const struct net_device_ops device_netdev_ops = {
     .ndo_do_ioctl           = device_ioctl,
     .ndo_get_stats          = device_get_stats,
     .ndo_start_xmit         = device_xmit,
-    .ndo_set_multicast_list = device_set_multi,
+    .ndo_set_rx_mode	    = device_set_multi,
 };
 
 static int __devinit
@@ -907,7 +900,7 @@ static BOOL device_alloc_bufs(PSDevice pDevice) {
     }
 
     // allocate rcb mem
-    pDevice->pRCBMem = kmalloc((sizeof(RCB) * pDevice->cbRD), GFP_KERNEL);
+	pDevice->pRCBMem = kzalloc((sizeof(RCB) * pDevice->cbRD), GFP_KERNEL);
     if (pDevice->pRCBMem == NULL) {
         DBG_PRT(MSG_LEVEL_ERR,KERN_ERR "%s : alloc rx usb context failed\n", pDevice->dev->name);
         goto free_tx;
@@ -919,7 +912,6 @@ static BOOL device_alloc_bufs(PSDevice pDevice) {
     pDevice->FirstRecvMngList = NULL;
     pDevice->LastRecvMngList = NULL;
     pDevice->NumRecvFreeList = 0;
-    memset(pDevice->pRCBMem, 0, (sizeof(RCB) * pDevice->cbRD));
     pRCB = (PRCB) pDevice->pRCBMem;
 
     for (ii = 0; ii < pDevice->cbRD; ii++) {
@@ -955,7 +947,6 @@ static BOOL device_alloc_bufs(PSDevice pDevice) {
 	pDevice->pInterruptURB = usb_alloc_urb(0, GFP_ATOMIC);
 	if (pDevice->pInterruptURB == NULL) {
 	    DBG_PRT(MSG_LEVEL_ERR,KERN_ERR"Failed to alloc int urb\n");
-   	    usb_kill_urb(pDevice->pControlURB);
 	    usb_free_urb(pDevice->pControlURB);
 	    goto free_rx_tx;
 	}
@@ -963,8 +954,6 @@ static BOOL device_alloc_bufs(PSDevice pDevice) {
     pDevice->intBuf.pDataBuf = kmalloc(MAX_INTERRUPT_SIZE, GFP_KERNEL);
 	if (pDevice->intBuf.pDataBuf == NULL) {
 	    DBG_PRT(MSG_LEVEL_ERR,KERN_ERR"Failed to alloc int buf\n");
-   	    usb_kill_urb(pDevice->pControlURB);
-   	    usb_kill_urb(pDevice->pInterruptURB);
 	    usb_free_urb(pDevice->pControlURB);
 	    usb_free_urb(pDevice->pInterruptURB);
 	    goto free_rx_tx;
@@ -995,7 +984,7 @@ static BOOL device_init_defrag_cb(PSDevice pDevice) {
             DBG_PRT(MSG_LEVEL_ERR,KERN_ERR "%s: can not alloc frag bufs\n",
                 pDevice->dev->name);
             goto free_frag;
-        };
+        }
     }
     pDevice->cbDFCB = CB_MAX_RX_FRAG;
     pDevice->cbFreeDFCB = pDevice->cbDFCB;
@@ -1268,9 +1257,7 @@ static void __devexit vt6656_disconnect(struct usb_interface *intf)
 	}
 
 	device_release_WPADEV(device);
-
-	if (device->firmware)
-		release_firmware(device->firmware);
+	release_firmware(device->firmware);
 
 	usb_set_intfdata(intf, NULL);
 	usb_put_dev(interface_to_usbdev(intf));
@@ -1628,15 +1615,8 @@ static int  device_ioctl(struct net_device *dev, struct ifreq *rq, int cmd) {
 		break;
 
 	case SIOCSIWNWID:
-        rc = -EOPNOTSUPP;
-		break;
-
 	case SIOCGIWNWID:     //0x8b03  support
-	#ifdef  WPA_SUPPLICANT_DRIVER_WEXT_SUPPORT
-          rc = iwctl_giwnwid(dev, NULL, &(wrq->u.nwid), NULL);
-	#else
-        rc = -EOPNOTSUPP;
-	#endif
+		rc = -EOPNOTSUPP;
 		break;
 
 		// Set frequency/channel
@@ -1675,8 +1655,8 @@ static int  device_ioctl(struct net_device *dev, struct ifreq *rq, int cmd) {
 		{
 			char essid[IW_ESSID_MAX_SIZE+1];
 			if (wrq->u.essid.pointer) {
-				rc = iwctl_giwessid(dev, NULL,
-						    &(wrq->u.essid), essid);
+				iwctl_giwessid(dev, NULL,
+					    &(wrq->u.essid), essid);
 				if (copy_to_user(wrq->u.essid.pointer,
 						         essid,
 						         wrq->u.essid.length) )
@@ -1716,14 +1696,13 @@ static int  device_ioctl(struct net_device *dev, struct ifreq *rq, int cmd) {
 
 	// Get the current bit-rate
 	case SIOCGIWRATE:
-
-		rc = iwctl_giwrate(dev, NULL, &(wrq->u.bitrate), NULL);
+		iwctl_giwrate(dev, NULL, &(wrq->u.bitrate), NULL);
 		break;
 
 	// Set the desired RTS threshold
 	case SIOCSIWRTS:
 
-		rc = iwctl_siwrts(dev, NULL, &(wrq->u.rts), NULL);
+		rc = iwctl_siwrts(dev, &(wrq->u.rts));
 		break;
 
 	// Get the current RTS threshold
@@ -1751,7 +1730,7 @@ static int  device_ioctl(struct net_device *dev, struct ifreq *rq, int cmd) {
 
 		// Get mode of operation
 	case SIOCGIWMODE:
-		rc = iwctl_giwmode(dev, NULL, &(wrq->u.mode), NULL);
+		iwctl_giwmode(dev, NULL, &(wrq->u.mode), NULL);
 		break;
 
 		// Set WEP keys and mode
@@ -1829,7 +1808,7 @@ static int  device_ioctl(struct net_device *dev, struct ifreq *rq, int cmd) {
 		{
 			struct iw_range range;
 
-			rc = iwctl_giwrange(dev, NULL, &(wrq->u.data), (char *) &range);
+			iwctl_giwrange(dev, NULL, &(wrq->u.data), (char *) &range);
 			if (copy_to_user(wrq->u.data.pointer, &range, sizeof(struct iw_range)))
 				rc = -EFAULT;
 		}
@@ -2113,16 +2092,4 @@ static struct usb_driver vt6656_driver = {
 #endif /* CONFIG_PM */
 };
 
-static int __init vt6656_init_module(void)
-{
-    printk(KERN_NOTICE DEVICE_FULL_DRV_NAM " " DEVICE_VERSION);
-    return usb_register(&vt6656_driver);
-}
-
-static void __exit vt6656_cleanup_module(void)
-{
-	usb_deregister(&vt6656_driver);
-}
-
-module_init(vt6656_init_module);
-module_exit(vt6656_cleanup_module);
+module_usb_driver(vt6656_driver);

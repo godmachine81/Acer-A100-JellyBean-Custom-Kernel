@@ -13,6 +13,8 @@
 #include <linux/seqlock.h>
 #include <linux/init.h>
 #include <linux/slab.h>
+#include <linux/nsproxy.h>
+#include <linux/swap.h>
 #include <net/snmp.h>
 #include <net/icmp.h>
 #include <net/ip.h>
@@ -21,8 +23,11 @@
 #include <net/udp.h>
 #include <net/cipso_ipv4.h>
 #include <net/inet_frag.h>
+#include <net/ping.h>
+#include <net/tcp_memcontrol.h>
 
 static int zero;
+static int two = 2;
 static int tcp_retr1_max = 255;
 static int ip_local_port_range_min[] = { 1, 1 };
 static int ip_local_port_range_max[] = { 65535, 65535 };
@@ -30,6 +35,8 @@ static int tcp_adv_win_scale_min = -31;
 static int tcp_adv_win_scale_max = 31;
 static int ip_ttl_min = 1;
 static int ip_ttl_max = 255;
+static int ip_ping_group_range_min[] = { 0, 0 };
+static int ip_ping_group_range_max[] = { GID_T_MAX, GID_T_MAX };
 
 /* Update system visible IP port range */
 static void set_local_port_range(int range[2])
@@ -64,6 +71,53 @@ static int ipv4_local_port_range(ctl_table *table, int write,
 		else
 			set_local_port_range(range);
 	}
+
+	return ret;
+}
+
+
+static void inet_get_ping_group_range_table(struct ctl_table *table, gid_t *low, gid_t *high)
+{
+	gid_t *data = table->data;
+	unsigned int seq;
+	do {
+		seq = read_seqbegin(&sysctl_local_ports.lock);
+
+		*low = data[0];
+		*high = data[1];
+	} while (read_seqretry(&sysctl_local_ports.lock, seq));
+}
+
+/* Update system visible IP port range */
+static void set_ping_group_range(struct ctl_table *table, gid_t range[2])
+{
+	gid_t *data = table->data;
+	write_seqlock(&sysctl_local_ports.lock);
+	data[0] = range[0];
+	data[1] = range[1];
+	write_sequnlock(&sysctl_local_ports.lock);
+}
+
+/* Validate changes from /proc interface. */
+static int ipv4_ping_group_range(ctl_table *table, int write,
+				 void __user *buffer,
+				 size_t *lenp, loff_t *ppos)
+{
+	int ret;
+	gid_t range[2];
+	ctl_table tmp = {
+		.data = &range,
+		.maxlen = sizeof(range),
+		.mode = table->mode,
+		.extra1 = &ip_ping_group_range_min,
+		.extra2 = &ip_ping_group_range_max,
+	};
+
+	inet_get_ping_group_range_table(table, range, range + 1);
+	ret = proc_dointvec_minmax(&tmp, write, buffer, lenp, ppos);
+
+	if (write && ret == 0)
+		set_ping_group_range(table, range);
 
 	return ret;
 }
@@ -121,6 +175,49 @@ static int proc_allowed_congestion_control(ctl_table *ctl,
 		ret = tcp_set_allowed_congestion_control(tbl.data);
 	kfree(tbl.data);
 	return ret;
+}
+
+static int ipv4_tcp_mem(ctl_table *ctl, int write,
+			   void __user *buffer, size_t *lenp,
+			   loff_t *ppos)
+{
+	int ret;
+	unsigned long vec[3];
+	struct net *net = current->nsproxy->net_ns;
+#ifdef CONFIG_CGROUP_MEM_RES_CTLR_KMEM
+	struct mem_cgroup *memcg;
+#endif
+
+	ctl_table tmp = {
+		.data = &vec,
+		.maxlen = sizeof(vec),
+		.mode = ctl->mode,
+	};
+
+	if (!write) {
+		ctl->data = &net->ipv4.sysctl_tcp_mem;
+		return proc_doulongvec_minmax(ctl, write, buffer, lenp, ppos);
+	}
+
+	ret = proc_doulongvec_minmax(&tmp, write, buffer, lenp, ppos);
+	if (ret)
+		return ret;
+
+#ifdef CONFIG_CGROUP_MEM_RES_CTLR_KMEM
+	rcu_read_lock();
+	memcg = mem_cgroup_from_task(current);
+
+	tcp_prot_mem(memcg, vec[0], 0);
+	tcp_prot_mem(memcg, vec[1], 1);
+	tcp_prot_mem(memcg, vec[2], 2);
+	rcu_read_unlock();
+#endif
+
+	net->ipv4.sysctl_tcp_mem[0] = vec[0];
+	net->ipv4.sysctl_tcp_mem[1] = vec[1];
+	net->ipv4.sysctl_tcp_mem[2] = vec[2];
+
+	return 0;
 }
 
 static struct ctl_table ipv4_table[] = {
@@ -347,20 +444,6 @@ static struct ctl_table ipv4_table[] = {
 		.proc_handler	= proc_dointvec_jiffies,
 	},
 	{
-		.procname	= "inet_peer_gc_mintime",
-		.data		= &inet_peer_gc_mintime,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_jiffies,
-	},
-	{
-		.procname	= "inet_peer_gc_maxtime",
-		.data		= &inet_peer_gc_maxtime,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_jiffies,
-	},
-	{
 		.procname	= "tcp_orphan_retries",
 		.data		= &sysctl_tcp_orphan_retries,
 		.maxlen		= sizeof(int),
@@ -394,13 +477,6 @@ static struct ctl_table ipv4_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec
-	},
-	{
-		.procname	= "tcp_mem",
-		.data		= &sysctl_tcp_mem,
-		.maxlen		= sizeof(sysctl_tcp_mem),
-		.mode		= 0644,
-		.proc_handler	= proc_doulongvec_minmax
 	},
 	{
 		.procname	= "tcp_wmem",
@@ -602,6 +678,15 @@ static struct ctl_table ipv4_table[] = {
 		.proc_handler   = proc_dointvec
 	},
 	{
+		.procname	= "tcp_early_retrans",
+		.data		= &sysctl_tcp_early_retrans,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &two,
+	},
+	{
 		.procname	= "udp_mem",
 		.data		= &sysctl_udp_mem,
 		.maxlen		= sizeof(sysctl_udp_mem),
@@ -677,15 +762,21 @@ static struct ctl_table ipv4_net_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec
 	},
+	{
+		.procname	= "ping_group_range",
+		.data		= &init_net.ipv4.sysctl_ping_group_range,
+		.maxlen		= sizeof(init_net.ipv4.sysctl_ping_group_range),
+		.mode		= 0644,
+		.proc_handler	= ipv4_ping_group_range,
+	},
+	{
+		.procname	= "tcp_mem",
+		.maxlen		= sizeof(init_net.ipv4.sysctl_tcp_mem),
+		.mode		= 0644,
+		.proc_handler	= ipv4_tcp_mem,
+	},
 	{ }
 };
-
-struct ctl_path net_ipv4_ctl_path[] = {
-	{ .procname = "net", },
-	{ .procname = "ipv4", },
-	{ },
-};
-EXPORT_SYMBOL_GPL(net_ipv4_ctl_path);
 
 static __net_init int ipv4_sysctl_init_net(struct net *net)
 {
@@ -711,12 +802,23 @@ static __net_init int ipv4_sysctl_init_net(struct net *net)
 			&net->ipv4.sysctl_icmp_ratemask;
 		table[6].data =
 			&net->ipv4.sysctl_rt_cache_rebuild_count;
+		table[7].data =
+			&net->ipv4.sysctl_ping_group_range;
+
 	}
+
+	/*
+	 * Sane defaults - nobody may create ping sockets.
+	 * Boot scripts should set this to distro-specific group.
+	 */
+	net->ipv4.sysctl_ping_group_range[0] = 1;
+	net->ipv4.sysctl_ping_group_range[1] = 0;
 
 	net->ipv4.sysctl_rt_cache_rebuild_count = 4;
 
-	net->ipv4.ipv4_hdr = register_net_sysctl_table(net,
-			net_ipv4_ctl_path, table);
+	tcp_init_mem(net);
+
+	net->ipv4.ipv4_hdr = register_net_sysctl(net, "net/ipv4", table);
 	if (net->ipv4.ipv4_hdr == NULL)
 		goto err_reg;
 
@@ -757,12 +859,12 @@ static __init int sysctl_ipv4_init(void)
 	if (!i->procname)
 		return -EINVAL;
 
-	hdr = register_sysctl_paths(net_ipv4_ctl_path, ipv4_table);
+	hdr = register_net_sysctl(&init_net, "net/ipv4", ipv4_table);
 	if (hdr == NULL)
 		return -ENOMEM;
 
 	if (register_pernet_subsys(&ipv4_sysctl_ops)) {
-		unregister_sysctl_table(hdr);
+		unregister_net_sysctl_table(hdr);
 		return -ENOMEM;
 	}
 

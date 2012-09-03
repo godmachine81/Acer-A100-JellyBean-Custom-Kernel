@@ -1,8 +1,7 @@
 /*
  * An RTC driver for the NVIDIA Tegra 200 series internal RTC.
  *
- * Copyright (c) 2010-2011, NVIDIA Corporation.
- * Copyright (c) 2010 Jon Mayo <jmayo@nvidia.com>
+ * Copyright (c) 2010, NVIDIA Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -310,7 +309,8 @@ static int __devinit tegra_rtc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	info = kzalloc(sizeof(struct tegra_rtc_info), GFP_KERNEL);
+	info = devm_kzalloc(&pdev->dev, sizeof(struct tegra_rtc_info),
+		GFP_KERNEL);
 	if (!info)
 		return -ENOMEM;
 
@@ -318,33 +318,22 @@ static int __devinit tegra_rtc_probe(struct platform_device *pdev)
 	if (!res) {
 		dev_err(&pdev->dev,
 			"Unable to allocate resources for device.\n");
-		ret = -EBUSY;
-		goto err_free_info;
+		return -EBUSY;
 	}
 
-	if (!request_mem_region(res->start, resource_size(res), pdev->name)) {
-		dev_err(&pdev->dev,
-			"Unable to request mem region for device.\n");
-		ret = -EBUSY;
-		goto err_free_info;
+	info->rtc_base = devm_request_and_ioremap(&pdev->dev, res);
+	if (!info->rtc_base) {
+		dev_err(&pdev->dev, "Unable to request mem region and grab IOs for device.\n");
+		return -EBUSY;
 	}
 
 	info->tegra_rtc_irq = platform_get_irq(pdev, 0);
-	if (info->tegra_rtc_irq <= 0) {
-		ret = -EBUSY;
-		goto err_release_mem_region;
-	}
-
-	info->rtc_base = ioremap_nocache(res->start, resource_size(res));
-	if (!info->rtc_base) {
-		dev_err(&pdev->dev, "Unable to grab IOs for device.\n");
-		ret = -EBUSY;
-		goto err_release_mem_region;
-	}
+	if (info->tegra_rtc_irq <= 0)
+		return -EBUSY;
 
 	/* set context info. */
 	info->pdev = pdev;
-	info->tegra_rtc_lock = __SPIN_LOCK_UNLOCKED(info->tegra_rtc_lock);
+	spin_lock_init(&info->tegra_rtc_lock);
 
 	platform_set_drvdata(pdev, info);
 
@@ -363,11 +352,12 @@ static int __devinit tegra_rtc_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev,
 			"Unable to register device (err=%d).\n",
 			ret);
-		goto err_iounmap;
+		return ret;
 	}
 
-	ret = request_irq(info->tegra_rtc_irq, tegra_rtc_irq_handler,
-		IRQF_TRIGGER_HIGH, "rtc alarm", &pdev->dev);
+	ret = devm_request_irq(&pdev->dev, info->tegra_rtc_irq,
+			tegra_rtc_irq_handler, IRQF_TRIGGER_HIGH,
+			"rtc alarm", &pdev->dev);
 	if (ret) {
 		dev_err(&pdev->dev,
 			"Unable to request interrupt for device (err=%d).\n",
@@ -377,46 +367,10 @@ static int __devinit tegra_rtc_probe(struct platform_device *pdev)
 
 	dev_notice(&pdev->dev, "Tegra internal Real Time Clock\n");
 
-#ifndef CONFIG_TEGRA_SILICON_PLATFORM
-	{
-		struct rtc_time tm;
-
-		/* Get the current time from the RTC. */
-		ret = tegra_rtc_read_time(&pdev->dev, &tm);
-		if (ret) {
-			/* Report but ignore this error. */
-			dev_err(&pdev->dev,
-				"Failed to get FPGA internal RTC time (err=%d)\n",
-				ret);
-		} else if (tm.tm_year < 2010) {
-			/* The RTC's default reset time is soooo last century. */
-			tm.tm_year = 2010-1900;
-			tm.tm_mon  = 0;
-			tm.tm_mday = 1;
-			tm.tm_hour = 0;
-			tm.tm_min  = 0;
-			tm.tm_sec  = 0;
-			ret = tegra_rtc_set_time(&pdev->dev, &tm);
-			if (ret) {
-				/* Report but ignore this error. */
-				dev_err(&pdev->dev,
-					"Failed to set FPGA internal RTC time (err=%d)\n",
-					ret);
-			}
-		}
-	}
-#endif
-
 	return 0;
 
 err_dev_unreg:
 	rtc_device_unregister(info->rtc_dev);
-err_iounmap:
-	iounmap(info->rtc_base);
-err_release_mem_region:
-	release_mem_region(res->start, resource_size(res));
-err_free_info:
-	kfree(info);
 
 	return ret;
 }
@@ -424,17 +378,8 @@ err_free_info:
 static int __devexit tegra_rtc_remove(struct platform_device *pdev)
 {
 	struct tegra_rtc_info *info = platform_get_drvdata(pdev);
-	struct resource *res;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res)
-		return -EBUSY;
-
-	free_irq(info->tegra_rtc_irq, &pdev->dev);
 	rtc_device_unregister(info->rtc_dev);
-	iounmap(info->rtc_base);
-	release_mem_region(res->start, resource_size(res));
-	kfree(info);
 
 	platform_set_drvdata(pdev, NULL);
 

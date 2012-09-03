@@ -248,6 +248,11 @@ static sctp_xmit_t sctp_packet_bundle_sack(struct sctp_packet *pkt,
 		/* If the SACK timer is running, we have a pending SACK */
 		if (timer_pending(timer)) {
 			struct sctp_chunk *sack;
+
+			if (pkt->transport->sack_generation !=
+			    pkt->transport->asoc->peer.sack_generation)
+				return retval;
+
 			asoc->a_rwnd = asoc->rwnd;
 			sack = sctp_make_sack(asoc);
 			if (sack) {
@@ -377,9 +382,7 @@ int sctp_packet_transmit(struct sctp_packet *packet)
 	 */
 	skb_set_owner_w(nskb, sk);
 
-	/* The 'obsolete' field of dst is set to 2 when a dst is freed. */
-	if (!dst || (dst->obsolete > 1)) {
-		dst_release(dst);
+	if (!sctp_transport_dst_check(tp)) {
 		sctp_transport_route(tp, NULL, sctp_sk(sk));
 		if (asoc && (asoc->param_flags & SPP_PMTUD_ENABLE)) {
 			sctp_assoc_sync_pmtu(asoc);
@@ -500,23 +503,20 @@ int sctp_packet_transmit(struct sctp_packet *packet)
 	 * Note: Adler-32 is no longer applicable, as has been replaced
 	 * by CRC32-C as described in <draft-ietf-tsvwg-sctpcsum-02.txt>.
 	 */
-	if (!sctp_checksum_disable &&
-	    !(dst->dev->features & (NETIF_F_NO_CSUM | NETIF_F_SCTP_CSUM))) {
-		__u32 crc32 = sctp_start_cksum((__u8 *)sh, cksum_buf_len);
+	if (!sctp_checksum_disable) {
+		if (!(dst->dev->features & NETIF_F_SCTP_CSUM)) {
+			__u32 crc32 = sctp_start_cksum((__u8 *)sh, cksum_buf_len);
 
-		/* 3) Put the resultant value into the checksum field in the
-		 *    common header, and leave the rest of the bits unchanged.
-		 */
-		sh->checksum = sctp_end_cksum(crc32);
-	} else {
-		if (dst->dev->features & NETIF_F_SCTP_CSUM) {
+			/* 3) Put the resultant value into the checksum field in the
+			 *    common header, and leave the rest of the bits unchanged.
+			 */
+			sh->checksum = sctp_end_cksum(crc32);
+		} else {
 			/* no need to seed pseudo checksum for SCTP */
 			nskb->ip_summed = CHECKSUM_PARTIAL;
 			nskb->csum_start = (skb_transport_header(nskb) -
 			                    nskb->head);
 			nskb->csum_offset = offsetof(struct sctphdr, checksum);
-		} else {
-			nskb->ip_summed = CHECKSUM_UNNECESSARY;
 		}
 	}
 
@@ -666,8 +666,8 @@ static sctp_xmit_t sctp_packet_can_append_data(struct sctp_packet *packet,
 	 */
 	if (!sctp_sk(asoc->base.sk)->nodelay && sctp_packet_empty(packet) &&
 	    inflight && sctp_state(asoc, ESTABLISHED)) {
-		unsigned max = transport->pathmtu - packet->overhead;
-		unsigned len = chunk->skb->len + q->out_qlen;
+		unsigned int max = transport->pathmtu - packet->overhead;
+		unsigned int len = chunk->skb->len + q->out_qlen;
 
 		/* Check whether this chunk and all the rest of pending
 		 * data will fit or delay in hopes of bundling a full
@@ -700,13 +700,7 @@ static void sctp_packet_append_data(struct sctp_packet *packet,
 	/* Keep track of how many bytes are in flight to the receiver. */
 	asoc->outqueue.outstanding_bytes += datasize;
 
-	/* Update our view of the receiver's rwnd. Include sk_buff overhead
-	 * while updating peer.rwnd so that it reduces the chances of a
-	 * receiver running out of receive buffer space even when receive
-	 * window is still open. This can happen when a sender is sending
-	 * sending small messages.
-	 */
-	datasize += sizeof(struct sk_buff);
+	/* Update our view of the receiver's rwnd. */
 	if (datasize < rwnd)
 		rwnd -= datasize;
 	else

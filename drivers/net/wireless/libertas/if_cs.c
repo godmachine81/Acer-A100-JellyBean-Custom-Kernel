@@ -21,6 +21,8 @@
 
 */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
@@ -312,7 +314,8 @@ static int if_cs_poll_while_fw_download(struct if_cs_card *card, uint addr, u8 r
 #define CF8385_MANFID		0x02df
 #define CF8385_CARDID		0x8103
 
-/* FIXME: just use the 'driver_info' field of 'struct pcmcia_device_id' when
+/*
+ * FIXME: just use the 'driver_info' field of 'struct pcmcia_device_id' when
  * that gets fixed.  Currently there's no way to access it from the probe hook.
  */
 static inline u32 get_model(u16 manf_id, u16 card_id)
@@ -361,7 +364,7 @@ static int if_cs_send_cmd(struct lbs_private *priv, u8 *buf, u16 nb)
 		if (status & IF_CS_BIT_COMMAND)
 			break;
 		if (++loops > 100) {
-			lbs_pr_err("card not ready for commands\n");
+			netdev_err(priv->dev, "card not ready for commands\n");
 			goto done;
 		}
 		mdelay(1);
@@ -431,14 +434,16 @@ static int if_cs_receive_cmdres(struct lbs_private *priv, u8 *data, u32 *len)
 	/* is hardware ready? */
 	status = if_cs_read16(priv->card, IF_CS_CARD_STATUS);
 	if ((status & IF_CS_BIT_RESP) == 0) {
-		lbs_pr_err("no cmd response in card\n");
+		netdev_err(priv->dev, "no cmd response in card\n");
 		*len = 0;
 		goto out;
 	}
 
 	*len = if_cs_read16(priv->card, IF_CS_RESP_LEN);
 	if ((*len == 0) || (*len > LBS_CMD_BUFFER_SIZE)) {
-		lbs_pr_err("card cmd buffer has invalid # of bytes (%d)\n", *len);
+		netdev_err(priv->dev,
+			   "card cmd buffer has invalid # of bytes (%d)\n",
+			   *len);
 		goto out;
 	}
 
@@ -472,7 +477,9 @@ static struct sk_buff *if_cs_receive_data(struct lbs_private *priv)
 
 	len = if_cs_read16(priv->card, IF_CS_READ_LEN);
 	if (len == 0 || len > MRVDRV_ETH_RX_PACKET_BUFFER_SIZE) {
-		lbs_pr_err("card data buffer has invalid # of bytes (%d)\n", len);
+		netdev_err(priv->dev,
+			   "card data buffer has invalid # of bytes (%d)\n",
+			   len);
 		priv->dev->stats.rx_dropped++;
 		goto dat_err;
 	}
@@ -621,8 +628,10 @@ static int if_cs_prog_helper(struct if_cs_card *card, const struct firmware *fw)
 		if (remain < count)
 			count = remain;
 
-		/* "write the number of bytes to be sent to the I/O Command
-		 * write length register" */
+		/*
+		 * "write the number of bytes to be sent to the I/O Command
+		 * write length register"
+		 */
 		if_cs_write16(card, IF_CS_CMD_LEN, count);
 
 		/* "write this to I/O Command port register as 16 bit writes */
@@ -631,21 +640,27 @@ static int if_cs_prog_helper(struct if_cs_card *card, const struct firmware *fw)
 				&fw->data[sent],
 				count >> 1);
 
-		/* "Assert the download over interrupt command in the Host
-		 * status register" */
+		/*
+		 * "Assert the download over interrupt command in the Host
+		 * status register"
+		 */
 		if_cs_write8(card, IF_CS_HOST_STATUS, IF_CS_BIT_COMMAND);
 
-		/* "Assert the download over interrupt command in the Card
-		 * interrupt case register" */
+		/*
+		 * "Assert the download over interrupt command in the Card
+		 * interrupt case register"
+		 */
 		if_cs_write16(card, IF_CS_HOST_INT_CAUSE, IF_CS_BIT_COMMAND);
 
-		/* "The host polls the Card Status register ... for 50 ms before
-		   declaring a failure */
+		/*
+		 * "The host polls the Card Status register ... for 50 ms before
+		 * declaring a failure"
+		 */
 		ret = if_cs_poll_while_fw_download(card, IF_CS_CARD_STATUS,
 			IF_CS_BIT_COMMAND);
 		if (ret < 0) {
-			lbs_pr_err("can't download helper at 0x%x, ret %d\n",
-				sent, ret);
+			pr_err("can't download helper at 0x%x, ret %d\n",
+			       sent, ret);
 			goto done;
 		}
 
@@ -675,7 +690,7 @@ static int if_cs_prog_real(struct if_cs_card *card, const struct firmware *fw)
 	ret = if_cs_poll_while_fw_download(card, IF_CS_SQ_READ_LOW,
 		IF_CS_SQ_HELPER_OK);
 	if (ret < 0) {
-		lbs_pr_err("helper firmware doesn't answer\n");
+		pr_err("helper firmware doesn't answer\n");
 		goto done;
 	}
 
@@ -683,13 +698,13 @@ static int if_cs_prog_real(struct if_cs_card *card, const struct firmware *fw)
 		len = if_cs_read16(card, IF_CS_SQ_READ_LOW);
 		if (len & 1) {
 			retry++;
-			lbs_pr_info("odd, need to retry this firmware block\n");
+			pr_info("odd, need to retry this firmware block\n");
 		} else {
 			retry = 0;
 		}
 
 		if (retry > 20) {
-			lbs_pr_err("could not download firmware\n");
+			pr_err("could not download firmware\n");
 			ret = -ENODEV;
 			goto done;
 		}
@@ -709,20 +724,64 @@ static int if_cs_prog_real(struct if_cs_card *card, const struct firmware *fw)
 		ret = if_cs_poll_while_fw_download(card, IF_CS_CARD_STATUS,
 			IF_CS_BIT_COMMAND);
 		if (ret < 0) {
-			lbs_pr_err("can't download firmware at 0x%x\n", sent);
+			pr_err("can't download firmware at 0x%x\n", sent);
 			goto done;
 		}
 	}
 
 	ret = if_cs_poll_while_fw_download(card, IF_CS_SCRATCH, 0x5a);
 	if (ret < 0)
-		lbs_pr_err("firmware download failed\n");
+		pr_err("firmware download failed\n");
 
 done:
 	lbs_deb_leave_args(LBS_DEB_CS, "ret %d", ret);
 	return ret;
 }
 
+static void if_cs_prog_firmware(struct lbs_private *priv, int ret,
+				 const struct firmware *helper,
+				 const struct firmware *mainfw)
+{
+	struct if_cs_card *card = priv->card;
+
+	if (ret) {
+		pr_err("failed to find firmware (%d)\n", ret);
+		return;
+	}
+
+	/* Load the firmware */
+	ret = if_cs_prog_helper(card, helper);
+	if (ret == 0 && (card->model != MODEL_8305))
+		ret = if_cs_prog_real(card, mainfw);
+	if (ret)
+		goto out;
+
+	/* Now actually get the IRQ */
+	ret = request_irq(card->p_dev->irq, if_cs_interrupt,
+		IRQF_SHARED, DRV_NAME, card);
+	if (ret) {
+		pr_err("error in request_irq\n");
+		goto out;
+	}
+
+	/*
+	 * Clear any interrupt cause that happened while sending
+	 * firmware/initializing card
+	 */
+	if_cs_write16(card, IF_CS_CARD_INT_CAUSE, IF_CS_BIT_MASK);
+	if_cs_enable_ints(card);
+
+	/* And finally bring the card up */
+	priv->fw_ready = 1;
+	if (lbs_start_card(priv) != 0) {
+		pr_err("could not activate card\n");
+		free_irq(card->p_dev->irq, card);
+	}
+
+out:
+	release_firmware(helper);
+	release_firmware(mainfw);
+}
 
 
 /********************************************************************/
@@ -750,7 +809,8 @@ static int if_cs_host_to_card(struct lbs_private *priv,
 		ret = if_cs_send_cmd(priv, buf, nb);
 		break;
 	default:
-		lbs_pr_err("%s: unsupported type %d\n", __func__, type);
+		netdev_err(priv->dev, "%s: unsupported type %d\n",
+			   __func__, type);
 	}
 
 	lbs_deb_leave_args(LBS_DEB_CS, "ret %d", ret);
@@ -779,7 +839,7 @@ static int if_cs_ioprobe(struct pcmcia_device *p_dev, void *priv_data)
 	p_dev->resource[0]->flags |= IO_DATA_PATH_WIDTH_AUTO;
 
 	if (p_dev->resource[1]->end) {
-		lbs_pr_err("wrong CIS (check number of IO windows)\n");
+		pr_err("wrong CIS (check number of IO windows)\n");
 		return -ENODEV;
 	}
 
@@ -793,23 +853,20 @@ static int if_cs_probe(struct pcmcia_device *p_dev)
 	unsigned int prod_id;
 	struct lbs_private *priv;
 	struct if_cs_card *card;
-	const struct firmware *helper = NULL;
-	const struct firmware *mainfw = NULL;
 
 	lbs_deb_enter(LBS_DEB_CS);
 
 	card = kzalloc(sizeof(struct if_cs_card), GFP_KERNEL);
-	if (!card) {
-		lbs_pr_err("error in kzalloc\n");
+	if (!card)
 		goto out;
-	}
+
 	card->p_dev = p_dev;
 	p_dev->priv = card;
 
 	p_dev->config_flags |= CONF_ENABLE_IRQ | CONF_AUTO_SET_IO;
 
 	if (pcmcia_loop_config(p_dev, if_cs_ioprobe, NULL)) {
-		lbs_pr_err("error in pcmcia_loop_config\n");
+		pr_err("error in pcmcia_loop_config\n");
 		goto out1;
 	}
 
@@ -825,14 +882,14 @@ static int if_cs_probe(struct pcmcia_device *p_dev)
 	card->iobase = ioport_map(p_dev->resource[0]->start,
 				resource_size(p_dev->resource[0]));
 	if (!card->iobase) {
-		lbs_pr_err("error in ioport_map\n");
+		pr_err("error in ioport_map\n");
 		ret = -EIO;
 		goto out1;
 	}
 
 	ret = pcmcia_enable_device(p_dev);
 	if (ret) {
-		lbs_pr_err("error in pcmcia_enable_device\n");
+		pr_err("error in pcmcia_enable_device\n");
 		goto out2;
 	}
 
@@ -841,53 +898,39 @@ static int if_cs_probe(struct pcmcia_device *p_dev)
 
 	/*
 	 * Most of the libertas cards can do unaligned register access, but some
-	 * weird ones can not. That's especially true for the CF8305 card.
+	 * weird ones cannot. That's especially true for the CF8305 card.
 	 */
-	card->align_regs = 0;
+	card->align_regs = false;
 
 	card->model = get_model(p_dev->manf_id, p_dev->card_id);
 	if (card->model == MODEL_UNKNOWN) {
-		lbs_pr_err("unsupported manf_id 0x%04x / card_id 0x%04x\n",
-			   p_dev->manf_id, p_dev->card_id);
+		pr_err("unsupported manf_id 0x%04x / card_id 0x%04x\n",
+		       p_dev->manf_id, p_dev->card_id);
 		goto out2;
 	}
 
 	/* Check if we have a current silicon */
 	prod_id = if_cs_read8(card, IF_CS_PRODUCT_ID);
 	if (card->model == MODEL_8305) {
-		card->align_regs = 1;
+		card->align_regs = true;
 		if (prod_id < IF_CS_CF8305_B1_REV) {
-			lbs_pr_err("8305 rev B0 and older are not supported\n");
+			pr_err("8305 rev B0 and older are not supported\n");
 			ret = -ENODEV;
 			goto out2;
 		}
 	}
 
 	if ((card->model == MODEL_8381) && prod_id < IF_CS_CF8381_B3_REV) {
-		lbs_pr_err("8381 rev B2 and older are not supported\n");
+		pr_err("8381 rev B2 and older are not supported\n");
 		ret = -ENODEV;
 		goto out2;
 	}
 
 	if ((card->model == MODEL_8385) && prod_id < IF_CS_CF8385_B1_REV) {
-		lbs_pr_err("8385 rev B0 and older are not supported\n");
+		pr_err("8385 rev B0 and older are not supported\n");
 		ret = -ENODEV;
 		goto out2;
 	}
-
-	ret = lbs_get_firmware(&p_dev->dev, NULL, NULL, card->model,
-				&fw_table[0], &helper, &mainfw);
-	if (ret) {
-		lbs_pr_err("failed to find firmware (%d)\n", ret);
-		goto out2;
-	}
-
-	/* Load the firmware early, before calling into libertas.ko */
-	ret = if_cs_prog_helper(card, helper);
-	if (ret == 0 && (card->model != MODEL_8305))
-		ret = if_cs_prog_real(card, mainfw);
-	if (ret)
-		goto out2;
 
 	/* Make this card known to the libertas driver */
 	priv = lbs_add_card(card, &p_dev->dev);
@@ -896,35 +939,22 @@ static int if_cs_probe(struct pcmcia_device *p_dev)
 		goto out2;
 	}
 
-	/* Finish setting up fields in lbs_private */
+	/* Set up fields in lbs_private */
 	card->priv = priv;
 	priv->card = card;
 	priv->hw_host_to_card = if_cs_host_to_card;
 	priv->enter_deep_sleep = NULL;
 	priv->exit_deep_sleep = NULL;
 	priv->reset_deep_sleep_wakeup = NULL;
-	priv->fw_ready = 1;
 
-	/* Now actually get the IRQ */
-	ret = request_irq(p_dev->irq, if_cs_interrupt,
-		IRQF_SHARED, DRV_NAME, card);
+	/* Get firmware */
+	ret = lbs_get_firmware_async(priv, &p_dev->dev, card->model, fw_table,
+				     if_cs_prog_firmware);
 	if (ret) {
-		lbs_pr_err("error in request_irq\n");
+		pr_err("failed to find firmware (%d)\n", ret);
 		goto out3;
 	}
 
-	/* Clear any interrupt cause that happened while sending
-	 * firmware/initializing card */
-	if_cs_write16(card, IF_CS_CARD_INT_CAUSE, IF_CS_BIT_MASK);
-	if_cs_enable_ints(card);
-
-	/* And finally bring the card up */
-	if (lbs_start_card(priv) != 0) {
-		lbs_pr_err("could not activate card\n");
-		goto out3;
-	}
-
-	ret = 0;
 	goto out;
 
 out3:
@@ -934,11 +964,6 @@ out2:
 out1:
 	pcmcia_disable_device(p_dev);
 out:
-	if (helper)
-		release_firmware(helper);
-	if (mainfw)
-		release_firmware(mainfw);
-
 	lbs_deb_leave_args(LBS_DEB_CS, "ret %d", ret);
 	return ret;
 }
@@ -965,7 +990,7 @@ static void if_cs_detach(struct pcmcia_device *p_dev)
 /* Module initialization                                            */
 /********************************************************************/
 
-static struct pcmcia_device_id if_cs_ids[] = {
+static const struct pcmcia_device_id if_cs_ids[] = {
 	PCMCIA_DEVICE_MANF_CARD(CF8305_MANFID, CF8305_CARDID),
 	PCMCIA_DEVICE_MANF_CARD(CF8381_MANFID, CF8381_CARDID),
 	PCMCIA_DEVICE_MANF_CARD(CF8385_MANFID, CF8385_CARDID),

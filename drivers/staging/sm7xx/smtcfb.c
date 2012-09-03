@@ -2,28 +2,19 @@
  * Silicon Motion SM7XX frame buffer device
  *
  * Copyright (C) 2006 Silicon Motion Technology Corp.
- * Authors: Ge Wang, gewang@siliconmotion.com
- *	    Boyod boyod.yang@siliconmotion.com.cn
+ * Authors:  Ge Wang, gewang@siliconmotion.com
+ *	     Boyod boyod.yang@siliconmotion.com.cn
  *
  * Copyright (C) 2009 Lemote, Inc.
- * Author: Wu Zhangjin, wuzhangjin@gmail.com
+ * Author:   Wu Zhangjin, wuzhangjin@gmail.com
  *
- *  This file is subject to the terms and conditions of the GNU General Public
- *  License. See the file COPYING in the main directory of this archive for
- *  more details.
+ * Copyright (C) 2011 Igalia, S.L.
+ * Author:   Javier M. Mellid <jmunhoz@igalia.com>
  *
- * Version 0.10.26192.21.01
- *	- Add PowerPC/Big endian support
- *	- Add 2D support for Lynx
- *	- Verified on2.6.19.2  Boyod.yang <boyod.yang@siliconmotion.com.cn>
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License. See the file COPYING in the main directory of this archive for
+ * more details.
  *
- * Version 0.09.2621.00.01
- *	- Only support Linux Kernel's version 2.6.21.
- *	Boyod.yang  <boyod.yang@siliconmotion.com.cn>
- *
- * Version 0.09
- *	- Only support Linux Kernel's version 2.6.12.
- *	Boyod.yang <boyod.yang@siliconmotion.com.cn>
  */
 
 #include <linux/io.h>
@@ -32,6 +23,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/module.h>
 #include <linux/console.h>
 #include <linux/screen_info.h>
 
@@ -39,42 +31,21 @@
 #include <linux/pm.h>
 #endif
 
-struct screen_info smtc_screen_info;
-
 #include "smtcfb.h"
 
-#ifdef DEBUG
-#define smdbg(format, arg...)	printk(KERN_DEBUG format , ## arg)
-#else
-#define smdbg(format, arg...)
-#endif
+struct screen_info smtc_screen_info;
 
 /*
 * Private structure
 */
 struct smtcfb_info {
-	/*
-	 * The following is a pointer to be passed into the
-	 * functions below.  The modules outside the main
-	 * voyager.c driver have no knowledge as to what
-	 * is within this structure.
-	 */
 	struct fb_info fb;
-	struct display_switch *dispsw;
-	struct pci_dev *dev;
-	signed int currcon;
-
+	struct pci_dev *pdev;
 	struct {
 		u8 red, green, blue;
 	} palette[NR_RGB];
-
 	u_int palette_size;
-};
 
-struct par_info {
-	/*
-	 * Hardware
-	 */
 	u16 chipID;
 	unsigned char __iomem *m_pMMIO;
 	char __iomem *m_pLFB;
@@ -99,17 +70,17 @@ struct vesa_mode_table	{
 static struct vesa_mode_table vesa_mode[] = {
 	{"0x301", 640,  480,  8},
 	{"0x303", 800,  600,  8},
-	{"0x305", 1024, 768,	8},
+	{"0x305", 1024, 768,  8},
 	{"0x307", 1280, 1024, 8},
 
 	{"0x311", 640,  480,  16},
 	{"0x314", 800,  600,  16},
-	{"0x317", 1024, 768,	16},
+	{"0x317", 1024, 768,  16},
 	{"0x31A", 1280, 1024, 16},
 
 	{"0x312", 640,  480,  24},
 	{"0x315", 800,  600,  24},
-	{"0x318", 1024, 768,	24},
+	{"0x318", 1024, 768,  24},
 	{"0x31B", 1280, 1024, 24},
 };
 
@@ -117,40 +88,53 @@ char __iomem *smtc_RegBaseAddress;	/* Memory Map IO starting address */
 char __iomem *smtc_VRAMBaseAddress;	/* video memory starting address */
 
 static u32 colreg[17];
-static struct par_info hw;	/* hardware information */
 
-u16 smtc_ChipIDs[] = {
-	0x710,
-	0x712,
-	0x720
+static struct fb_var_screeninfo smtcfb_var = {
+	.xres           = 1024,
+	.yres           = 600,
+	.xres_virtual   = 1024,
+	.yres_virtual   = 600,
+	.bits_per_pixel = 16,
+	.red            = {16, 8, 0},
+	.green          = {8, 8, 0},
+	.blue           = {0, 8, 0},
+	.activate       = FB_ACTIVATE_NOW,
+	.height         = -1,
+	.width          = -1,
+	.vmode          = FB_VMODE_NONINTERLACED,
 };
 
-#define numSMTCchipIDs (sizeof(smtc_ChipIDs) / sizeof(u16))
+static struct fb_fix_screeninfo smtcfb_fix = {
+	.id             = "sm712fb",
+	.type           = FB_TYPE_PACKED_PIXELS,
+	.visual         = FB_VISUAL_TRUECOLOR,
+	.line_length    = 800 * 3,
+	.accel          = FB_ACCEL_SMI_LYNX,
+};
 
-static void sm712_set_timing(struct smtcfb_info *sfb,
-			     struct par_info *ppar_info)
+static void sm712_set_timing(struct smtcfb_info *sfb)
 {
 	int i = 0, j = 0;
 	u32 m_nScreenStride;
 
-	smdbg("\nppar_info->width = %d ppar_info->height = %d"
-			"sfb->fb.var.bits_per_pixel = %d ppar_info->hz = %d\n",
-			ppar_info->width, ppar_info->height,
-			sfb->fb.var.bits_per_pixel, ppar_info->hz);
+	dev_dbg(&sfb->pdev->dev,
+		"sfb->width=%d sfb->height=%d "
+		"sfb->fb.var.bits_per_pixel=%d sfb->hz=%d\n",
+		sfb->width, sfb->height, sfb->fb.var.bits_per_pixel, sfb->hz);
 
 	for (j = 0; j < numVGAModes; j++) {
-		if (VGAMode[j].mmSizeX == ppar_info->width &&
-		    VGAMode[j].mmSizeY == ppar_info->height &&
+		if (VGAMode[j].mmSizeX == sfb->width &&
+		    VGAMode[j].mmSizeY == sfb->height &&
 		    VGAMode[j].bpp == sfb->fb.var.bits_per_pixel &&
-		    VGAMode[j].hz == ppar_info->hz) {
+		    VGAMode[j].hz == sfb->hz) {
 
-			smdbg("\nVGAMode[j].mmSizeX  = %d VGAMode[j].mmSizeY ="
-					"%d VGAMode[j].bpp = %d"
-					"VGAMode[j].hz=%d\n",
-					VGAMode[j].mmSizeX, VGAMode[j].mmSizeY,
-					VGAMode[j].bpp, VGAMode[j].hz);
+			dev_dbg(&sfb->pdev->dev,
+				"VGAMode[j].mmSizeX=%d VGAMode[j].mmSizeY=%d "
+				"VGAMode[j].bpp=%d VGAMode[j].hz=%d\n",
+				VGAMode[j].mmSizeX, VGAMode[j].mmSizeY,
+				VGAMode[j].bpp, VGAMode[j].hz);
 
-			smdbg("VGAMode index=%d\n", j);
+			dev_dbg(&sfb->pdev->dev, "VGAMode index=%d\n", j);
 
 			smtc_mmiowb(0x0, 0x3c6);
 
@@ -211,37 +195,37 @@ static void sm712_set_timing(struct smtcfb_info *sfb,
 	smtc_mmiowb(0x67, 0x3c2);
 
 	/* set VPR registers */
-	writel(0x0, ppar_info->m_pVPR + 0x0C);
-	writel(0x0, ppar_info->m_pVPR + 0x40);
+	writel(0x0, sfb->m_pVPR + 0x0C);
+	writel(0x0, sfb->m_pVPR + 0x40);
 
 	/* set data width */
 	m_nScreenStride =
-		(ppar_info->width * sfb->fb.var.bits_per_pixel) / 64;
+		(sfb->width * sfb->fb.var.bits_per_pixel) / 64;
 	switch (sfb->fb.var.bits_per_pixel) {
 	case 8:
-		writel(0x0, ppar_info->m_pVPR + 0x0);
+		writel(0x0, sfb->m_pVPR + 0x0);
 		break;
 	case 16:
-		writel(0x00020000, ppar_info->m_pVPR + 0x0);
+		writel(0x00020000, sfb->m_pVPR + 0x0);
 		break;
 	case 24:
-		writel(0x00040000, ppar_info->m_pVPR + 0x0);
+		writel(0x00040000, sfb->m_pVPR + 0x0);
 		break;
 	case 32:
-		writel(0x00030000, ppar_info->m_pVPR + 0x0);
+		writel(0x00030000, sfb->m_pVPR + 0x0);
 		break;
 	}
 	writel((u32) (((m_nScreenStride + 2) << 16) | m_nScreenStride),
-	       ppar_info->m_pVPR + 0x10);
+	       sfb->m_pVPR + 0x10);
 
 }
 
 static void sm712_setpalette(int regno, unsigned red, unsigned green,
 			     unsigned blue, struct fb_info *info)
 {
-	struct par_info *cur_par = (struct par_info *)info->par;
+	struct smtcfb_info *sfb = info->par;
 
-	if (cur_par->BaseAddressInVRAM)
+	if (sfb->BaseAddressInVRAM)
 		/*
 		 * second display palette for dual head. Enable CRT RAM, 6-bit
 		 * RAM
@@ -256,40 +240,16 @@ static void sm712_setpalette(int regno, unsigned red, unsigned green,
 	smtc_mmiowb(blue >> 10, dac_val);
 }
 
-static void smtc_set_timing(struct smtcfb_info *sfb, struct par_info
-		*ppar_info)
+static void smtc_set_timing(struct smtcfb_info *sfb)
 {
-	switch (ppar_info->chipID) {
+	switch (sfb->chipID) {
 	case 0x710:
 	case 0x712:
 	case 0x720:
-		sm712_set_timing(sfb, ppar_info);
+		sm712_set_timing(sfb);
 		break;
 	}
 }
-
-static struct fb_var_screeninfo smtcfb_var = {
-	.xres = 1024,
-	.yres = 600,
-	.xres_virtual = 1024,
-	.yres_virtual = 600,
-	.bits_per_pixel = 16,
-	.red = {16, 8, 0},
-	.green = {8, 8, 0},
-	.blue = {0, 8, 0},
-	.activate = FB_ACTIVATE_NOW,
-	.height = -1,
-	.width = -1,
-	.vmode = FB_VMODE_NONINTERLACED,
-};
-
-static struct fb_fix_screeninfo smtcfb_fix = {
-	.id = "sm712fb",
-	.type = FB_TYPE_PACKED_PIXELS,
-	.visual = FB_VISUAL_TRUECOLOR,
-	.line_length = 800 * 3,
-	.accel = FB_ACCEL_SMI_LYNX,
-};
 
 /* chan_to_field
  *
@@ -306,7 +266,7 @@ static inline unsigned int chan_to_field(unsigned int chan,
 	return chan << bf->offset;
 }
 
-static int cfb_blank(int blank_mode, struct fb_info *info)
+static int smtc_blank(int blank_mode, struct fb_info *info)
 {
 	/* clear DPMS setting */
 	switch (blank_mode) {
@@ -438,7 +398,7 @@ static int smtc_setcolreg(unsigned regno, unsigned red, unsigned green,
 }
 
 #ifdef __BIG_ENDIAN
-static ssize_t smtcfb_read(struct fb_info *info, char __user * buf, size_t
+static ssize_t smtcfb_read(struct fb_info *info, char __user *buf, size_t
 				count, loff_t *ppos)
 {
 	unsigned long p = *ppos;
@@ -604,20 +564,6 @@ smtcfb_write(struct fb_info *info, const char __user *buf, size_t count,
 }
 #endif	/* ! __BIG_ENDIAN */
 
-static struct fb_ops smtcfb_ops = {
-	.owner = THIS_MODULE,
-	.fb_setcolreg = smtc_setcolreg,
-	.fb_blank = cfb_blank,
-	.fb_fillrect = cfb_fillrect,
-	.fb_imageblit = cfb_imageblit,
-	.fb_copyarea = cfb_copyarea,
-#ifdef __BIG_ENDIAN
-	.fb_read = smtcfb_read,
-	.fb_write = smtcfb_write,
-#endif
-
-};
-
 void smtcfb_setmode(struct smtcfb_info *sfb)
 {
 	switch (sfb->fb.var.bits_per_pixel) {
@@ -670,27 +616,66 @@ void smtcfb_setmode(struct smtcfb_info *sfb)
 		break;
 	}
 
-	hw.width = sfb->fb.var.xres;
-	hw.height = sfb->fb.var.yres;
-	hw.hz = 60;
-	smtc_set_timing(sfb, &hw);
+	sfb->width = sfb->fb.var.xres;
+	sfb->height = sfb->fb.var.yres;
+	sfb->hz = 60;
+	smtc_set_timing(sfb);
 }
+
+static int smtc_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
+{
+	/* sanity checks */
+	if (var->xres_virtual < var->xres)
+		var->xres_virtual = var->xres;
+
+	if (var->yres_virtual < var->yres)
+		var->yres_virtual = var->yres;
+
+	/* set valid default bpp */
+	if ((var->bits_per_pixel != 8)  && (var->bits_per_pixel != 16) &&
+	    (var->bits_per_pixel != 24) && (var->bits_per_pixel != 32))
+		var->bits_per_pixel = 16;
+
+	return 0;
+}
+
+static int smtc_set_par(struct fb_info *info)
+{
+	struct smtcfb_info *sfb = (struct smtcfb_info *)info;
+
+	smtcfb_setmode(sfb);
+
+	return 0;
+}
+
+static struct fb_ops smtcfb_ops = {
+	.owner        = THIS_MODULE,
+	.fb_check_var = smtc_check_var,
+	.fb_set_par   = smtc_set_par,
+	.fb_setcolreg = smtc_setcolreg,
+	.fb_blank     = smtc_blank,
+	.fb_fillrect  = cfb_fillrect,
+	.fb_imageblit = cfb_imageblit,
+	.fb_copyarea  = cfb_copyarea,
+#ifdef __BIG_ENDIAN
+	.fb_read      = smtcfb_read,
+	.fb_write     = smtcfb_write,
+#endif
+};
 
 /*
  * Alloc struct smtcfb_info and assign the default value
  */
-static struct smtcfb_info *smtc_alloc_fb_info(struct pci_dev *dev,
-							char *name)
+static struct smtcfb_info *smtc_alloc_fb_info(struct pci_dev *pdev, char *name)
 {
 	struct smtcfb_info *sfb;
 
-	sfb = kzalloc(sizeof(struct smtcfb_info), GFP_KERNEL);
+	sfb = kzalloc(sizeof(*sfb), GFP_KERNEL);
 
 	if (!sfb)
 		return NULL;
 
-	sfb->currcon = -1;
-	sfb->dev = dev;
+	sfb->pdev = pdev;
 
 	/*** Init sfb->fb with default value ***/
 	sfb->fb.flags = FBINFO_FLAG_DEFAULT;
@@ -714,7 +699,9 @@ static struct smtcfb_info *smtc_alloc_fb_info(struct pci_dev *dev,
 	/* text mode acceleration */
 	sfb->fb.var.accel_flags = FB_ACCELF_TEXT;
 	sfb->fb.var.vmode = FB_VMODE_NONINTERLACED;
-	sfb->fb.par = &hw;
+
+	sfb->fb.par = sfb;
+
 	sfb->fb.pseudo_palette = colreg;
 
 	return sfb;
@@ -735,17 +722,17 @@ static void smtc_unmap_mmio(struct smtcfb_info *sfb)
  */
 
 static int smtc_map_smem(struct smtcfb_info *sfb,
-		struct pci_dev *dev, u_long smem_len)
+		struct pci_dev *pdev, u_long smem_len)
 {
 	if (sfb->fb.var.bits_per_pixel == 32) {
 #ifdef __BIG_ENDIAN
-		sfb->fb.fix.smem_start = pci_resource_start(dev, 0)
+		sfb->fb.fix.smem_start = pci_resource_start(pdev, 0)
 			+ 0x800000;
 #else
-		sfb->fb.fix.smem_start = pci_resource_start(dev, 0);
+		sfb->fb.fix.smem_start = pci_resource_start(pdev, 0);
 #endif
 	} else {
-		sfb->fb.fix.smem_start = pci_resource_start(dev, 0);
+		sfb->fb.fix.smem_start = pci_resource_start(pdev, 0);
 	}
 
 	sfb->fb.fix.smem_len = smem_len;
@@ -753,8 +740,8 @@ static int smtc_map_smem(struct smtcfb_info *sfb,
 	sfb->fb.screen_base = smtc_VRAMBaseAddress;
 
 	if (!sfb->fb.screen_base) {
-		printk(KERN_INFO "%s: unable to map screen memory\n",
-				sfb->fb.fix.id);
+		dev_err(&pdev->dev,
+			"%s: unable to map screen memory\n", sfb->fb.fix.id);
 		return -ENOMEM;
 	}
 
@@ -796,23 +783,21 @@ static void smtc_free_fb_info(struct smtcfb_info *sfb)
  *	Returns zero.
  *
  */
-static int __init __maybe_unused sm712vga_setup(char *options)
+static int __init sm712vga_setup(char *options)
 {
 	int index;
 
-	if (!options || !*options) {
-		smdbg("\n No vga parameter\n");
+	if (!options || !*options)
 		return -EINVAL;
-	}
 
 	smtc_screen_info.lfb_width = 0;
 	smtc_screen_info.lfb_height = 0;
 	smtc_screen_info.lfb_depth = 0;
 
-	smdbg("\nsm712vga_setup = %s\n", options);
+	pr_debug("sm712vga_setup = %s\n", options);
 
 	for (index = 0;
-	     index < (sizeof(vesa_mode) / sizeof(struct vesa_mode_table));
+	     index < ARRAY_SIZE(vesa_mode);
 	     index++) {
 		if (strstr(options, vesa_mode[index].mode_index)) {
 			smtc_screen_info.lfb_width = vesa_mode[index].lfb_width;
@@ -827,10 +812,6 @@ static int __init __maybe_unused sm712vga_setup(char *options)
 }
 __setup("vga=", sm712vga_setup);
 
-/* Jason (08/13/2009)
- * Original init function changed to probe method to be used by pci_drv
- * process used to detect chips replaced with kernel process in pci_drv
- */
 static int __devinit smtcfb_pci_probe(struct pci_dev *pdev,
 				   const struct pci_device_id *ent)
 {
@@ -840,24 +821,20 @@ static int __devinit smtcfb_pci_probe(struct pci_dev *pdev,
 	int err;
 	unsigned long pFramebufferPhysical;
 
-	printk(KERN_INFO
-		"Silicon Motion display driver " SMTC_LINUX_FB_VERSION "\n");
+	dev_info(&pdev->dev, "Silicon Motion display driver.");
 
 	err = pci_enable_device(pdev);	/* enable SMTC chip */
 	if (err)
 		return err;
-	err = -ENOMEM;
-
-	hw.chipID = ent->device;
-	sprintf(name, "sm%Xfb", hw.chipID);
 
 	sfb = smtc_alloc_fb_info(pdev, name);
 
 	if (!sfb)
 		goto failed_free;
-	/* Jason (08/13/2009)
-	 * Store fb_info to be further used when suspending and resuming
-	 */
+
+	sfb->chipID = ent->device;
+	sprintf(name, "sm%Xfb", sfb->chipID);
+
 	pci_set_drvdata(pdev, sfb);
 
 	sm7xx_init_hw();
@@ -880,37 +857,37 @@ static int __devinit smtcfb_pci_probe(struct pci_dev *pdev,
 #endif
 	/* Map address and memory detection */
 	pFramebufferPhysical = pci_resource_start(pdev, 0);
-	pci_read_config_byte(pdev, PCI_REVISION_ID, &hw.chipRevID);
+	pci_read_config_byte(pdev, PCI_REVISION_ID, &sfb->chipRevID);
 
-	switch (hw.chipID) {
+	switch (sfb->chipID) {
 	case 0x710:
 	case 0x712:
 		sfb->fb.fix.mmio_start = pFramebufferPhysical + 0x00400000;
 		sfb->fb.fix.mmio_len = 0x00400000;
 		smem_size = SM712_VIDEOMEMORYSIZE;
 #ifdef __BIG_ENDIAN
-		hw.m_pLFB = (smtc_VRAMBaseAddress =
+		sfb->m_pLFB = (smtc_VRAMBaseAddress =
 		    ioremap(pFramebufferPhysical, 0x00c00000));
 #else
-		hw.m_pLFB = (smtc_VRAMBaseAddress =
+		sfb->m_pLFB = (smtc_VRAMBaseAddress =
 		    ioremap(pFramebufferPhysical, 0x00800000));
 #endif
-		hw.m_pMMIO = (smtc_RegBaseAddress =
+		sfb->m_pMMIO = (smtc_RegBaseAddress =
 		    smtc_VRAMBaseAddress + 0x00700000);
-		hw.m_pDPR = smtc_VRAMBaseAddress + 0x00408000;
-		hw.m_pVPR = hw.m_pLFB + 0x0040c000;
+		sfb->m_pDPR = smtc_VRAMBaseAddress + 0x00408000;
+		sfb->m_pVPR = sfb->m_pLFB + 0x0040c000;
 #ifdef __BIG_ENDIAN
 		if (sfb->fb.var.bits_per_pixel == 32) {
 			smtc_VRAMBaseAddress += 0x800000;
-			hw.m_pLFB += 0x800000;
-			printk(KERN_INFO
-				"\nsmtc_VRAMBaseAddress=%p hw.m_pLFB=%p\n",
-					smtc_VRAMBaseAddress, hw.m_pLFB);
+			sfb->m_pLFB += 0x800000;
+			dev_info(&pdev->dev,
+				 "smtc_VRAMBaseAddress=%p sfb->m_pLFB=%p",
+				  smtc_VRAMBaseAddress, sfb->m_pLFB);
 		}
 #endif
 		if (!smtc_RegBaseAddress) {
-			printk(KERN_INFO
-				"%s: unable to map memory mapped IO\n",
+			dev_err(&pdev->dev,
+				"%s: unable to map memory mapped IO!",
 				sfb->fb.fix.id);
 			err = -ENOMEM;
 			goto failed_fb;
@@ -932,20 +909,20 @@ static int __devinit smtcfb_pci_probe(struct pci_dev *pdev,
 		sfb->fb.fix.mmio_start = pFramebufferPhysical;
 		sfb->fb.fix.mmio_len = 0x00200000;
 		smem_size = SM722_VIDEOMEMORYSIZE;
-		hw.m_pDPR = ioremap(pFramebufferPhysical, 0x00a00000);
-		hw.m_pLFB = (smtc_VRAMBaseAddress =
-		    hw.m_pDPR + 0x00200000);
-		hw.m_pMMIO = (smtc_RegBaseAddress =
-		    hw.m_pDPR + 0x000c0000);
-		hw.m_pVPR = hw.m_pDPR + 0x800;
+		sfb->m_pDPR = ioremap(pFramebufferPhysical, 0x00a00000);
+		sfb->m_pLFB = (smtc_VRAMBaseAddress =
+		    sfb->m_pDPR + 0x00200000);
+		sfb->m_pMMIO = (smtc_RegBaseAddress =
+		    sfb->m_pDPR + 0x000c0000);
+		sfb->m_pVPR = sfb->m_pDPR + 0x800;
 
 		smtc_seqw(0x62, 0xff);
 		smtc_seqw(0x6a, 0x0d);
 		smtc_seqw(0x6b, 0x02);
 		break;
 	default:
-		printk(KERN_INFO
-		"No valid Silicon Motion display chip was detected!\n");
+		dev_err(&pdev->dev,
+			"No valid Silicon Motion display chip was detected!");
 
 		goto failed_fb;
 	}
@@ -962,22 +939,21 @@ static int __devinit smtcfb_pci_probe(struct pci_dev *pdev,
 
 	smtcfb_setmode(sfb);
 	/* Primary display starting from 0 position */
-	hw.BaseAddressInVRAM = 0;
-	sfb->fb.par = &hw;
+	sfb->BaseAddressInVRAM = 0;
 
 	err = register_framebuffer(&sfb->fb);
 	if (err < 0)
 		goto failed;
 
-	printk(KERN_INFO "Silicon Motion SM%X Rev%X primary display mode"
-			"%dx%d-%d Init Complete.\n", hw.chipID, hw.chipRevID,
-			sfb->fb.var.xres, sfb->fb.var.yres,
-			sfb->fb.var.bits_per_pixel);
+	dev_info(&pdev->dev,
+		 "Silicon Motion SM%X Rev%X primary display mode %dx%d-%d Init Complete.",
+		 sfb->chipID, sfb->chipRevID, sfb->fb.var.xres,
+		 sfb->fb.var.yres, sfb->fb.var.bits_per_pixel);
 
 	return 0;
 
- failed:
-	printk(KERN_INFO "Silicon Motion, Inc.  primary display init fail\n");
+failed:
+	dev_err(&pdev->dev, "Silicon Motion, Inc. primary display init fail.");
 
 	smtc_unmap_smem(sfb);
 	smtc_unmap_mmio(sfb);
@@ -991,18 +967,14 @@ failed_free:
 }
 
 
-/* Jason (08/11/2009) PCI_DRV wrapper essential structs */
 static DEFINE_PCI_DEVICE_TABLE(smtcfb_pci_table) = {
-	{0x126f, 0x710, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
-	{0x126f, 0x712, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
-	{0x126f, 0x720, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
+	{ PCI_DEVICE(0x126f, 0x710), },
+	{ PCI_DEVICE(0x126f, 0x712), },
+	{ PCI_DEVICE(0x126f, 0x720), },
 	{0,}
 };
 
 
-/* Jason (08/14/2009)
- * do some clean up when the driver module is removed
- */
 static void __devexit smtcfb_pci_remove(struct pci_dev *pdev)
 {
 	struct smtcfb_info *sfb;
@@ -1016,13 +988,10 @@ static void __devexit smtcfb_pci_remove(struct pci_dev *pdev)
 }
 
 #ifdef CONFIG_PM
-/* Jason (08/14/2009)
- * suspend function, called when the suspend event is triggered
- */
-static int __maybe_unused smtcfb_suspend(struct pci_dev *pdev, pm_message_t msg)
+static int smtcfb_pci_suspend(struct device *device)
 {
+	struct pci_dev *pdev = to_pci_dev(device);
 	struct smtcfb_info *sfb;
-	int retv;
 
 	sfb = pci_get_drvdata(pdev);
 
@@ -1032,25 +1001,9 @@ static int __maybe_unused smtcfb_suspend(struct pci_dev *pdev, pm_message_t msg)
 	smtc_seqw(0x20, (smtc_seqr(0x20) | 0xc0));
 	smtc_seqw(0x69, (smtc_seqr(0x69) & 0xf7));
 
-	switch (msg.event) {
-	case PM_EVENT_FREEZE:
-	case PM_EVENT_PRETHAW:
-		pdev->dev.power.power_state = msg;
-		return 0;
-	}
-
-	/* when doing suspend, call fb apis and pci apis */
-	if (msg.event == PM_EVENT_SUSPEND) {
-		console_lock();
-		fb_set_suspend(&sfb->fb, 1);
-		console_unlock();
-		retv = pci_save_state(pdev);
-		pci_disable_device(pdev);
-		retv = pci_choose_state(pdev, msg);
-		retv = pci_set_power_state(pdev, retv);
-	}
-
-	pdev->dev.power.power_state = msg;
+	console_lock();
+	fb_set_suspend(&sfb->fb, 1);
+	console_unlock();
 
 	/* additionally turn off all function blocks including internal PLLs */
 	smtc_seqw(0x21, 0xff);
@@ -1058,25 +1011,16 @@ static int __maybe_unused smtcfb_suspend(struct pci_dev *pdev, pm_message_t msg)
 	return 0;
 }
 
-static int __maybe_unused smtcfb_resume(struct pci_dev *pdev)
+static int smtcfb_pci_resume(struct device *device)
 {
+	struct pci_dev *pdev = to_pci_dev(device);
 	struct smtcfb_info *sfb;
-	int retv;
 
 	sfb = pci_get_drvdata(pdev);
 
-	/* when resuming, restore pci data and fb cursor */
-	if (pdev->dev.power.power_state.event != PM_EVENT_FREEZE) {
-		retv = pci_set_power_state(pdev, PCI_D0);
-		pci_restore_state(pdev);
-		if (pci_enable_device(pdev))
-			return -1;
-		pci_set_master(pdev);
-	}
-
 	/* reinit hardware */
 	sm7xx_init_hw();
-	switch (hw.chipID) {
+	switch (sfb->chipID) {
 	case 0x710:
 	case 0x712:
 		/* set MCLK = 14.31818 *  (0x16 / 0x2) */
@@ -1108,22 +1052,30 @@ static int __maybe_unused smtcfb_resume(struct pci_dev *pdev)
 
 	return 0;
 }
-#endif
 
-/* Jason (08/13/2009)
- * pci_driver struct used to wrap the original driver
- * so that it can be registered into the kernel and
- * the proper method would be called when suspending and resuming
- */
+static const struct dev_pm_ops sm7xx_pm_ops = {
+	.suspend = smtcfb_pci_suspend,
+	.resume = smtcfb_pci_resume,
+	.freeze = smtcfb_pci_suspend,
+	.thaw = smtcfb_pci_resume,
+	.poweroff = smtcfb_pci_suspend,
+	.restore = smtcfb_pci_resume,
+};
+
+#define SM7XX_PM_OPS (&sm7xx_pm_ops)
+
+#else  /* !CONFIG_PM */
+
+#define SM7XX_PM_OPS NULL
+
+#endif /* !CONFIG_PM */
+
 static struct pci_driver smtcfb_driver = {
 	.name = "smtcfb",
 	.id_table = smtcfb_pci_table,
 	.probe = smtcfb_pci_probe,
 	.remove = __devexit_p(smtcfb_pci_remove),
-#ifdef CONFIG_PM
-	.suspend = smtcfb_suspend,
-	.resume = smtcfb_resume,
-#endif
+	.driver.pm  = SM7XX_PM_OPS,
 };
 
 static int __init smtcfb_init(void)

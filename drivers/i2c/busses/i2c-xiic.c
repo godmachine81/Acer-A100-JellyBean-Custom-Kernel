@@ -34,13 +34,13 @@
 #include <linux/errno.h>
 #include <linux/delay.h>
 #include <linux/platform_device.h>
-#include <linux/mfd/core.h>
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/wait.h>
 #include <linux/i2c-xiic.h>
 #include <linux/io.h>
 #include <linux/slab.h>
+#include <linux/of_i2c.h>
 
 #define DRIVER_NAME "xiic-i2c"
 
@@ -427,7 +427,7 @@ static void xiic_process(struct xiic_i2c *i2c)
 			xiic_wakeup(i2c, STATE_ERROR);
 
 	} else if (pend & (XIIC_INTR_TX_EMPTY_MASK | XIIC_INTR_TX_HALF_MASK)) {
-		/* Transmit register/FIFO is empty or ½ empty */
+		/* Transmit register/FIFO is empty or Â½ empty */
 
 		clr = pend &
 			(XIIC_INTR_TX_EMPTY_MASK | XIIC_INTR_TX_HALF_MASK);
@@ -705,9 +705,7 @@ static int __devinit xiic_i2c_probe(struct platform_device *pdev)
 	if (irq < 0)
 		goto resource_missing;
 
-	pdata = mfd_get_data(pdev);
-	if (!pdata)
-		return -EINVAL;
+	pdata = (struct xiic_i2c_platform_data *) pdev->dev.platform_data;
 
 	i2c = kzalloc(sizeof(*i2c), GFP_KERNEL);
 	if (!i2c)
@@ -731,6 +729,7 @@ static int __devinit xiic_i2c_probe(struct platform_device *pdev)
 	i2c->adap = xiic_adapter;
 	i2c_set_adapdata(&i2c->adap, i2c);
 	i2c->adap.dev.parent = &pdev->dev;
+	i2c->adap.dev.of_node = pdev->dev.of_node;
 
 	xiic_reinit(i2c);
 
@@ -749,9 +748,13 @@ static int __devinit xiic_i2c_probe(struct platform_device *pdev)
 		goto add_adapter_failed;
 	}
 
-	/* add in known devices to the bus */
-	for (i = 0; i < pdata->num_devices; i++)
-		i2c_new_device(&i2c->adap, pdata->devices + i);
+	if (pdata) {
+		/* add in known devices to the bus */
+		for (i = 0; i < pdata->num_devices; i++)
+			i2c_new_device(&i2c->adap, pdata->devices + i);
+	}
+
+	of_i2c_register_devices(&i2c->adap);
 
 	return 0;
 
@@ -796,9 +799,13 @@ static int __devexit xiic_i2c_remove(struct platform_device* pdev)
 	return 0;
 }
 
-
-/* work with hotplug and coldplug */
-MODULE_ALIAS("platform:"DRIVER_NAME);
+#if defined(CONFIG_OF)
+static const struct of_device_id xiic_of_match[] __devinitconst = {
+	{ .compatible = "xlnx,xps-iic-2.00.a", },
+	{},
+};
+MODULE_DEVICE_TABLE(of, xiic_of_match);
+#endif
 
 static struct platform_driver xiic_i2c_driver = {
 	.probe   = xiic_i2c_probe,
@@ -806,22 +813,13 @@ static struct platform_driver xiic_i2c_driver = {
 	.driver  = {
 		.owner = THIS_MODULE,
 		.name = DRIVER_NAME,
+		.of_match_table = of_match_ptr(xiic_of_match),
 	},
 };
 
-static int __init xiic_i2c_init(void)
-{
-	return platform_driver_register(&xiic_i2c_driver);
-}
-
-static void __exit xiic_i2c_exit(void)
-{
-	platform_driver_unregister(&xiic_i2c_driver);
-}
-
-module_init(xiic_i2c_init);
-module_exit(xiic_i2c_exit);
+module_platform_driver(xiic_i2c_driver);
 
 MODULE_AUTHOR("info@mocean-labs.com");
 MODULE_DESCRIPTION("Xilinx I2C bus driver");
 MODULE_LICENSE("GPL v2");
+MODULE_ALIAS("platform:"DRIVER_NAME);

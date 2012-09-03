@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007-2011 B.A.T.M.A.N. contributors:
+ * Copyright (C) 2007-2012 B.A.T.M.A.N. contributors:
  *
  * Marek Lindner
  *
@@ -46,7 +46,7 @@ static int bat_socket_open(struct inode *inode, struct file *file)
 
 	nonseekable_open(inode, file);
 
-	socket_client = kmalloc(sizeof(struct socket_client), GFP_KERNEL);
+	socket_client = kmalloc(sizeof(*socket_client), GFP_KERNEL);
 
 	if (!socket_client)
 		return -ENOMEM;
@@ -59,8 +59,7 @@ static int bat_socket_open(struct inode *inode, struct file *file)
 	}
 
 	if (i == ARRAY_SIZE(socket_client_hash)) {
-		pr_err("Error - can't add another packet client: "
-		       "maximum number of clients reached\n");
+		pr_err("Error - can't add another packet client: maximum number of clients reached\n");
 		kfree(socket_client);
 		return -EXFULL;
 	}
@@ -136,10 +135,9 @@ static ssize_t bat_socket_read(struct file *file, char __user *buf,
 
 	spin_unlock_bh(&socket_client->lock);
 
-	error = __copy_to_user(buf, &socket_packet->icmp_packet,
-			       socket_packet->icmp_len);
+	packet_len = min(count, socket_packet->icmp_len);
+	error = copy_to_user(buf, &socket_packet->icmp_packet, packet_len);
 
-	packet_len = socket_packet->icmp_len;
 	kfree(socket_packet);
 
 	if (error)
@@ -153,6 +151,7 @@ static ssize_t bat_socket_write(struct file *file, const char __user *buff,
 {
 	struct socket_client *socket_client = file->private_data;
 	struct bat_priv *bat_priv = socket_client->bat_priv;
+	struct hard_iface *primary_if = NULL;
 	struct sk_buff *skb;
 	struct icmp_packet_rr *icmp_packet;
 
@@ -162,55 +161,53 @@ static ssize_t bat_socket_write(struct file *file, const char __user *buff,
 
 	if (len < sizeof(struct icmp_packet)) {
 		bat_dbg(DBG_BATMAN, bat_priv,
-			"Error - can't send packet from char device: "
-			"invalid packet size\n");
+			"Error - can't send packet from char device: invalid packet size\n");
 		return -EINVAL;
 	}
 
-	if (!bat_priv->primary_if)
-		return -EFAULT;
+	primary_if = primary_if_get_selected(bat_priv);
+
+	if (!primary_if) {
+		len = -EFAULT;
+		goto out;
+	}
 
 	if (len >= sizeof(struct icmp_packet_rr))
 		packet_len = sizeof(struct icmp_packet_rr);
 
-	skb = dev_alloc_skb(packet_len + sizeof(struct ethhdr));
-	if (!skb)
-		return -ENOMEM;
+	skb = dev_alloc_skb(packet_len + ETH_HLEN);
+	if (!skb) {
+		len = -ENOMEM;
+		goto out;
+	}
 
-	skb_reserve(skb, sizeof(struct ethhdr));
+	skb_reserve(skb, ETH_HLEN);
 	icmp_packet = (struct icmp_packet_rr *)skb_put(skb, packet_len);
 
-	if (!access_ok(VERIFY_READ, buff, packet_len)) {
+	if (copy_from_user(icmp_packet, buff, packet_len)) {
 		len = -EFAULT;
 		goto free_skb;
 	}
 
-	if (__copy_from_user(icmp_packet, buff, packet_len)) {
-		len = -EFAULT;
-		goto free_skb;
-	}
-
-	if (icmp_packet->packet_type != BAT_ICMP) {
+	if (icmp_packet->header.packet_type != BAT_ICMP) {
 		bat_dbg(DBG_BATMAN, bat_priv,
-			"Error - can't send packet from char device: "
-			"got bogus packet type (expected: BAT_ICMP)\n");
+			"Error - can't send packet from char device: got bogus packet type (expected: BAT_ICMP)\n");
 		len = -EINVAL;
 		goto free_skb;
 	}
 
 	if (icmp_packet->msg_type != ECHO_REQUEST) {
 		bat_dbg(DBG_BATMAN, bat_priv,
-			"Error - can't send packet from char device: "
-			"got bogus message type (expected: ECHO_REQUEST)\n");
+			"Error - can't send packet from char device: got bogus message type (expected: ECHO_REQUEST)\n");
 		len = -EINVAL;
 		goto free_skb;
 	}
 
 	icmp_packet->uid = socket_client->index;
 
-	if (icmp_packet->version != COMPAT_VERSION) {
+	if (icmp_packet->header.version != COMPAT_VERSION) {
 		icmp_packet->msg_type = PARAMETER_PROBLEM;
-		icmp_packet->ttl = COMPAT_VERSION;
+		icmp_packet->header.version = COMPAT_VERSION;
 		bat_socket_add_packet(socket_client, icmp_packet, packet_len);
 		goto free_skb;
 	}
@@ -218,23 +215,13 @@ static ssize_t bat_socket_write(struct file *file, const char __user *buff,
 	if (atomic_read(&bat_priv->mesh_state) != MESH_ACTIVE)
 		goto dst_unreach;
 
-	rcu_read_lock();
 	orig_node = orig_hash_find(bat_priv, icmp_packet->dst);
-
 	if (!orig_node)
-		goto unlock;
+		goto dst_unreach;
 
-	neigh_node = orig_node->router;
-
+	neigh_node = orig_node_get_router(orig_node);
 	if (!neigh_node)
-		goto unlock;
-
-	if (!atomic_inc_not_zero(&neigh_node->refcount)) {
-		neigh_node = NULL;
-		goto unlock;
-	}
-
-	rcu_read_unlock();
+		goto dst_unreach;
 
 	if (!neigh_node->if_incoming)
 		goto dst_unreach;
@@ -243,7 +230,7 @@ static ssize_t bat_socket_write(struct file *file, const char __user *buff,
 		goto dst_unreach;
 
 	memcpy(icmp_packet->orig,
-	       bat_priv->primary_if->net_dev->dev_addr, ETH_ALEN);
+	       primary_if->net_dev->dev_addr, ETH_ALEN);
 
 	if (packet_len == sizeof(struct icmp_packet_rr))
 		memcpy(icmp_packet->rr,
@@ -252,14 +239,14 @@ static ssize_t bat_socket_write(struct file *file, const char __user *buff,
 	send_skb_packet(skb, neigh_node->if_incoming, neigh_node->addr);
 	goto out;
 
-unlock:
-	rcu_read_unlock();
 dst_unreach:
 	icmp_packet->msg_type = DESTINATION_UNREACHABLE;
 	bat_socket_add_packet(socket_client, icmp_packet, packet_len);
 free_skb:
 	kfree_skb(skb);
 out:
+	if (primary_if)
+		hardif_free_ref(primary_if);
 	if (neigh_node)
 		neigh_node_free_ref(neigh_node);
 	if (orig_node)
@@ -313,7 +300,7 @@ static void bat_socket_add_packet(struct socket_client *socket_client,
 {
 	struct socket_packet *socket_packet;
 
-	socket_packet = kmalloc(sizeof(struct socket_packet), GFP_ATOMIC);
+	socket_packet = kmalloc(sizeof(*socket_packet), GFP_ATOMIC);
 
 	if (!socket_packet)
 		return;

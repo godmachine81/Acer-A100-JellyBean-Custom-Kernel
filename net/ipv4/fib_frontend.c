@@ -15,7 +15,6 @@
 
 #include <linux/module.h>
 #include <asm/uaccess.h>
-#include <asm/system.h>
 #include <linux/bitops.h>
 #include <linux/capability.h>
 #include <linux/types.h>
@@ -44,6 +43,7 @@
 #include <net/arp.h>
 #include <net/ip_fib.h>
 #include <net/rtnetlink.h>
+#include <net/xfrm.h>
 
 #ifndef CONFIG_IP_MULTIPLE_TABLES
 
@@ -136,13 +136,13 @@ static void fib_flush(struct net *net)
  * Find address type as if only "dev" was present in the system. If
  * on_dev is NULL then all interfaces are taken into consideration.
  */
-static inline unsigned __inet_dev_addr_type(struct net *net,
-					    const struct net_device *dev,
-					    __be32 addr)
+static inline unsigned int __inet_dev_addr_type(struct net *net,
+						const struct net_device *dev,
+						__be32 addr)
 {
 	struct flowi4		fl4 = { .daddr = addr };
 	struct fib_result	res;
-	unsigned ret = RTN_BROADCAST;
+	unsigned int ret = RTN_BROADCAST;
 	struct fib_table *local_table;
 
 	if (ipv4_is_zeronet(addr) || ipv4_is_lbcast(addr))
@@ -188,9 +188,9 @@ EXPORT_SYMBOL(inet_dev_addr_type);
  * - check, that packet arrived from expected physical interface.
  * called with rcu_read_lock()
  */
-int fib_validate_source(__be32 src, __be32 dst, u8 tos, int oif,
-			struct net_device *dev, __be32 *spec_dst,
-			u32 *itag, u32 mark)
+int fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst, u8 tos,
+			int oif, struct net_device *dev, __be32 *spec_dst,
+			u32 *itag)
 {
 	struct in_device *in_dev;
 	struct flowi4 fl4;
@@ -202,7 +202,6 @@ int fib_validate_source(__be32 src, __be32 dst, u8 tos, int oif,
 
 	fl4.flowi4_oif = 0;
 	fl4.flowi4_iif = oif;
-	fl4.flowi4_mark = mark;
 	fl4.daddr = src;
 	fl4.saddr = dst;
 	fl4.flowi4_tos = tos;
@@ -212,10 +211,12 @@ int fib_validate_source(__be32 src, __be32 dst, u8 tos, int oif,
 	in_dev = __in_dev_get_rcu(dev);
 	if (in_dev) {
 		no_addr = in_dev->ifa_list == NULL;
-		rpf = IN_DEV_RPFILTER(in_dev);
+
+		/* Ignore rp_filter for packets protected by IPsec. */
+		rpf = secpath_exists(skb) ? 0 : IN_DEV_RPFILTER(in_dev);
+
 		accept_local = IN_DEV_ACCEPT_LOCAL(in_dev);
-		if (mark && !IN_DEV_SRC_VMARK(in_dev))
-			fl4.flowi4_mark = 0;
+		fl4.flowi4_mark = IN_DEV_SRC_VMARK(in_dev) ? skb->mark : 0;
 	}
 
 	if (in_dev == NULL)
@@ -693,7 +694,7 @@ void fib_add_ifaddr(struct in_ifaddr *ifa)
 	if (ifa->ifa_flags & IFA_F_SECONDARY) {
 		prim = inet_ifa_byprefix(in_dev, prefix, mask);
 		if (prim == NULL) {
-			printk(KERN_WARNING "fib_add_ifaddr: bug: prim == NULL\n");
+			pr_warn("%s: bug: prim == NULL\n", __func__);
 			return;
 		}
 	}
@@ -739,7 +740,7 @@ void fib_del_ifaddr(struct in_ifaddr *ifa, struct in_ifaddr *iprim)
 #define BRD_OK		2
 #define BRD0_OK		4
 #define BRD1_OK		8
-	unsigned ok = 0;
+	unsigned int ok = 0;
 	int subnet = 0;		/* Primary network */
 	int gone = 1;		/* Address is missing */
 	int same_prefsrc = 0;	/* Another primary with same IP */
@@ -747,11 +748,11 @@ void fib_del_ifaddr(struct in_ifaddr *ifa, struct in_ifaddr *iprim)
 	if (ifa->ifa_flags & IFA_F_SECONDARY) {
 		prim = inet_ifa_byprefix(in_dev, any, ifa->ifa_mask);
 		if (prim == NULL) {
-			printk(KERN_WARNING "fib_del_ifaddr: bug: prim == NULL\n");
+			pr_warn("%s: bug: prim == NULL\n", __func__);
 			return;
 		}
 		if (iprim && iprim != prim) {
-			printk(KERN_WARNING "fib_del_ifaddr: bug: iprim != prim\n");
+			pr_warn("%s: bug: iprim != prim\n", __func__);
 			return;
 		}
 	} else if (!ipv4_is_zeronet(any) &&
@@ -1122,9 +1123,9 @@ static struct pernet_operations fib_net_ops = {
 
 void __init ip_fib_init(void)
 {
-	rtnl_register(PF_INET, RTM_NEWROUTE, inet_rtm_newroute, NULL);
-	rtnl_register(PF_INET, RTM_DELROUTE, inet_rtm_delroute, NULL);
-	rtnl_register(PF_INET, RTM_GETROUTE, NULL, inet_dump_fib);
+	rtnl_register(PF_INET, RTM_NEWROUTE, inet_rtm_newroute, NULL, NULL);
+	rtnl_register(PF_INET, RTM_DELROUTE, inet_rtm_delroute, NULL, NULL);
+	rtnl_register(PF_INET, RTM_GETROUTE, NULL, inet_dump_fib, NULL);
 
 	register_pernet_subsys(&fib_net_ops);
 	register_netdevice_notifier(&fib_netdev_notifier);

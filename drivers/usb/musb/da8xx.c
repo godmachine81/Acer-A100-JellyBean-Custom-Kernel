@@ -27,6 +27,7 @@
  */
 
 #include <linux/init.h>
+#include <linux/module.h>
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/platform_device.h>
@@ -172,11 +173,7 @@ static void da8xx_musb_disable(struct musb *musb)
 	musb_writel(reg_base, DA8XX_USB_END_OF_INTR_REG, 0);
 }
 
-#ifdef CONFIG_USB_MUSB_HDRC_HCD
-#define portstate(stmt) 	stmt
-#else
-#define portstate(stmt)
-#endif
+#define portstate(stmt)		stmt
 
 static void da8xx_musb_set_vbus(struct musb *musb, int is_on)
 {
@@ -199,7 +196,8 @@ static void otg_timer(unsigned long _musb)
 	 * status change events (from the transceiver) otherwise.
 	 */
 	devctl = musb_readb(mregs, MUSB_DEVCTL);
-	DBG(7, "Poll devctl %02x (%s)\n", devctl, otg_state_string(musb));
+	dev_dbg(musb->controller, "Poll devctl %02x (%s)\n", devctl,
+		otg_state_string(musb->xceiv->state));
 
 	spin_lock_irqsave(&musb->lock, flags);
 	switch (musb->xceiv->state) {
@@ -273,20 +271,22 @@ static void da8xx_musb_try_idle(struct musb *musb, unsigned long timeout)
 	/* Never idle if active, or when VBUS timeout is not set as host */
 	if (musb->is_active || (musb->a_wait_bcon == 0 &&
 				musb->xceiv->state == OTG_STATE_A_WAIT_BCON)) {
-		DBG(4, "%s active, deleting timer\n", otg_state_string(musb));
+		dev_dbg(musb->controller, "%s active, deleting timer\n",
+			otg_state_string(musb->xceiv->state));
 		del_timer(&otg_workaround);
 		last_timer = jiffies;
 		return;
 	}
 
 	if (time_after(last_timer, timeout) && timer_pending(&otg_workaround)) {
-		DBG(4, "Longer idle timer already pending, ignoring...\n");
+		dev_dbg(musb->controller, "Longer idle timer already pending, ignoring...\n");
 		return;
 	}
 	last_timer = timeout;
 
-	DBG(4, "%s inactive, starting idle timer for %u ms\n",
-	    otg_state_string(musb), jiffies_to_msecs(timeout - jiffies));
+	dev_dbg(musb->controller, "%s inactive, starting idle timer for %u ms\n",
+		otg_state_string(musb->xceiv->state),
+		jiffies_to_msecs(timeout - jiffies));
 	mod_timer(&otg_workaround, timeout);
 }
 
@@ -294,6 +294,7 @@ static irqreturn_t da8xx_musb_interrupt(int irq, void *hci)
 {
 	struct musb		*musb = hci;
 	void __iomem		*reg_base = musb->ctrl_base;
+	struct usb_otg		*otg = musb->xceiv->otg;
 	unsigned long		flags;
 	irqreturn_t		ret = IRQ_NONE;
 	u32			status;
@@ -311,7 +312,7 @@ static irqreturn_t da8xx_musb_interrupt(int irq, void *hci)
 		goto eoi;
 
 	musb_writel(reg_base, DA8XX_USB_INTR_SRC_CLEAR_REG, status);
-	DBG(4, "USB IRQ %08x\n", status);
+	dev_dbg(musb->controller, "USB IRQ %08x\n", status);
 
 	musb->int_rx = (status & DA8XX_INTR_RX_MASK) >> DA8XX_INTR_RX_SHIFT;
 	musb->int_tx = (status & DA8XX_INTR_TX_MASK) >> DA8XX_INTR_TX_SHIFT;
@@ -351,21 +352,21 @@ static irqreturn_t da8xx_musb_interrupt(int irq, void *hci)
 			WARNING("VBUS error workaround (delay coming)\n");
 		} else if (is_host_enabled(musb) && drvvbus) {
 			MUSB_HST_MODE(musb);
-			musb->xceiv->default_a = 1;
+			otg->default_a = 1;
 			musb->xceiv->state = OTG_STATE_A_WAIT_VRISE;
 			portstate(musb->port1_status |= USB_PORT_STAT_POWER);
 			del_timer(&otg_workaround);
 		} else {
 			musb->is_active = 0;
 			MUSB_DEV_MODE(musb);
-			musb->xceiv->default_a = 0;
+			otg->default_a = 0;
 			musb->xceiv->state = OTG_STATE_B_IDLE;
 			portstate(musb->port1_status &= ~USB_PORT_STAT_POWER);
 		}
 
-		DBG(2, "VBUS %s (%s)%s, devctl %02x\n",
+		dev_dbg(musb->controller, "VBUS %s (%s)%s, devctl %02x\n",
 				drvvbus ? "on" : "off",
-				otg_state_string(musb),
+				otg_state_string(musb->xceiv->state),
 				err ? " ERROR" : "",
 				devctl);
 		ret = IRQ_HANDLED;
@@ -394,23 +395,17 @@ static int da8xx_musb_set_mode(struct musb *musb, u8 musb_mode)
 
 	cfgchip2 &= ~CFGCHIP2_OTGMODE;
 	switch (musb_mode) {
-#ifdef	CONFIG_USB_MUSB_HDRC_HCD
 	case MUSB_HOST:		/* Force VBUS valid, ID = 0 */
 		cfgchip2 |= CFGCHIP2_FORCE_HOST;
 		break;
-#endif
-#ifdef	CONFIG_USB_GADGET_MUSB_HDRC
 	case MUSB_PERIPHERAL:	/* Force VBUS valid, ID = 1 */
 		cfgchip2 |= CFGCHIP2_FORCE_DEVICE;
 		break;
-#endif
-#ifdef	CONFIG_USB_MUSB_OTG
 	case MUSB_OTG:		/* Don't override the VBUS/ID comparators */
 		cfgchip2 |= CFGCHIP2_NO_OVERRIDE;
 		break;
-#endif
 	default:
-		DBG(2, "Trying to set unsupported mode %u\n", musb_mode);
+		dev_dbg(musb->controller, "Trying to set unsupported mode %u\n", musb_mode);
 	}
 
 	__raw_writel(cfgchip2, CFGCHIP2);
@@ -430,7 +425,7 @@ static int da8xx_musb_init(struct musb *musb)
 		goto fail;
 
 	usb_nop_xceiv_register();
-	musb->xceiv = otg_get_transceiver();
+	musb->xceiv = usb_get_transceiver();
 	if (!musb->xceiv)
 		goto fail;
 
@@ -463,7 +458,7 @@ static int da8xx_musb_exit(struct musb *musb)
 
 	phy_off();
 
-	otg_put_transceiver(musb->xceiv);
+	usb_put_transceiver(musb->xceiv);
 	usb_nop_xceiv_unregister();
 
 	return 0;
@@ -484,7 +479,7 @@ static const struct musb_platform_ops da8xx_ops = {
 
 static u64 da8xx_dmamask = DMA_BIT_MASK(32);
 
-static int __init da8xx_probe(struct platform_device *pdev)
+static int __devinit da8xx_probe(struct platform_device *pdev)
 {
 	struct musb_hdrc_platform_data	*pdata = pdev->dev.platform_data;
 	struct platform_device		*musb;
@@ -568,7 +563,7 @@ err0:
 	return ret;
 }
 
-static int __exit da8xx_remove(struct platform_device *pdev)
+static int __devexit da8xx_remove(struct platform_device *pdev)
 {
 	struct da8xx_glue		*glue = platform_get_drvdata(pdev);
 
@@ -582,7 +577,8 @@ static int __exit da8xx_remove(struct platform_device *pdev)
 }
 
 static struct platform_driver da8xx_driver = {
-	.remove		= __exit_p(da8xx_remove),
+	.probe		= da8xx_probe,
+	.remove		= __devexit_p(da8xx_remove),
 	.driver		= {
 		.name	= "musb-da8xx",
 	},
@@ -594,9 +590,9 @@ MODULE_LICENSE("GPL v2");
 
 static int __init da8xx_init(void)
 {
-	return platform_driver_probe(&da8xx_driver, da8xx_probe);
+	return platform_driver_register(&da8xx_driver);
 }
-subsys_initcall(da8xx_init);
+module_init(da8xx_init);
 
 static void __exit da8xx_exit(void)
 {

@@ -5,8 +5,8 @@
  *
  * Copyright (C) 2008 Nokia Corporation.
  *
- * Contact: Remi Denis-Courmont <remi.denis-courmont@nokia.com>
- * Original author: Sakari Ailus <sakari.ailus@nokia.com>
+ * Authors: Sakari Ailus <sakari.ailus@nokia.com>
+ *          Rémi Denis-Courmont
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,6 +31,7 @@
 #include <net/tcp_states.h>
 
 #include <linux/phonet.h>
+#include <linux/export.h>
 #include <net/phonet/phonet.h>
 #include <net/phonet/pep.h>
 #include <net/phonet/pn_dev.h>
@@ -52,16 +53,16 @@ static int pn_socket_release(struct socket *sock)
 
 static struct  {
 	struct hlist_head hlist[PN_HASHSIZE];
-	spinlock_t lock;
+	struct mutex lock;
 } pnsocks;
 
 void __init pn_sock_init(void)
 {
-	unsigned i;
+	unsigned int i;
 
 	for (i = 0; i < PN_HASHSIZE; i++)
 		INIT_HLIST_HEAD(pnsocks.hlist + i);
-	spin_lock_init(&pnsocks.lock);
+	mutex_init(&pnsocks.lock);
 }
 
 static struct hlist_head *pn_hash_list(u16 obj)
@@ -82,9 +83,8 @@ struct sock *pn_find_sock_by_sa(struct net *net, const struct sockaddr_pn *spn)
 	u8 res = spn->spn_resource;
 	struct hlist_head *hlist = pn_hash_list(obj);
 
-	spin_lock_bh(&pnsocks.lock);
-
-	sk_for_each(sknode, node, hlist) {
+	rcu_read_lock();
+	sk_for_each_rcu(sknode, node, hlist) {
 		struct pn_sock *pn = pn_sk(sknode);
 		BUG_ON(!pn->sobject); /* unbound socket */
 
@@ -107,8 +107,7 @@ struct sock *pn_find_sock_by_sa(struct net *net, const struct sockaddr_pn *spn)
 		sock_hold(sknode);
 		break;
 	}
-
-	spin_unlock_bh(&pnsocks.lock);
+	rcu_read_unlock();
 
 	return rval;
 }
@@ -117,9 +116,9 @@ struct sock *pn_find_sock_by_sa(struct net *net, const struct sockaddr_pn *spn)
 void pn_deliver_sock_broadcast(struct net *net, struct sk_buff *skb)
 {
 	struct hlist_head *hlist = pnsocks.hlist;
-	unsigned h;
+	unsigned int h;
 
-	spin_lock(&pnsocks.lock);
+	rcu_read_lock();
 	for (h = 0; h < PN_HASHSIZE; h++) {
 		struct hlist_node *node;
 		struct sock *sknode;
@@ -140,25 +139,26 @@ void pn_deliver_sock_broadcast(struct net *net, struct sk_buff *skb)
 		}
 		hlist++;
 	}
-	spin_unlock(&pnsocks.lock);
+	rcu_read_unlock();
 }
 
 void pn_sock_hash(struct sock *sk)
 {
 	struct hlist_head *hlist = pn_hash_list(pn_sk(sk)->sobject);
 
-	spin_lock_bh(&pnsocks.lock);
-	sk_add_node(sk, hlist);
-	spin_unlock_bh(&pnsocks.lock);
+	mutex_lock(&pnsocks.lock);
+	sk_add_node_rcu(sk, hlist);
+	mutex_unlock(&pnsocks.lock);
 }
 EXPORT_SYMBOL(pn_sock_hash);
 
 void pn_sock_unhash(struct sock *sk)
 {
-	spin_lock_bh(&pnsocks.lock);
-	sk_del_node_init(sk);
-	spin_unlock_bh(&pnsocks.lock);
+	mutex_lock(&pnsocks.lock);
+	sk_del_node_init_rcu(sk);
+	mutex_unlock(&pnsocks.lock);
 	pn_sock_unbind_all_res(sk);
+	synchronize_rcu();
 }
 EXPORT_SYMBOL(pn_sock_unhash);
 
@@ -545,10 +545,10 @@ static struct sock *pn_sock_get_idx(struct seq_file *seq, loff_t pos)
 	struct hlist_head *hlist = pnsocks.hlist;
 	struct hlist_node *node;
 	struct sock *sknode;
-	unsigned h;
+	unsigned int h;
 
 	for (h = 0; h < PN_HASHSIZE; h++) {
-		sk_for_each(sknode, node, hlist) {
+		sk_for_each_rcu(sknode, node, hlist) {
 			if (!net_eq(net, sock_net(sknode)))
 				continue;
 			if (!pos)
@@ -572,9 +572,9 @@ static struct sock *pn_sock_get_next(struct seq_file *seq, struct sock *sk)
 }
 
 static void *pn_sock_seq_start(struct seq_file *seq, loff_t *pos)
-	__acquires(pnsocks.lock)
+	__acquires(rcu)
 {
-	spin_lock_bh(&pnsocks.lock);
+	rcu_read_lock();
 	return *pos ? pn_sock_get_idx(seq, *pos - 1) : SEQ_START_TOKEN;
 }
 
@@ -591,9 +591,9 @@ static void *pn_sock_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 }
 
 static void pn_sock_seq_stop(struct seq_file *seq, void *v)
-	__releases(pnsocks.lock)
+	__releases(rcu)
 {
-	spin_unlock_bh(&pnsocks.lock);
+	rcu_read_unlock();
 }
 
 static int pn_sock_seq_show(struct seq_file *seq, void *v)
@@ -608,7 +608,7 @@ static int pn_sock_seq_show(struct seq_file *seq, void *v)
 		struct pn_sock *pn = pn_sk(sk);
 
 		seq_printf(seq, "%2d %04X:%04X:%02X %02X %08X:%08X %5d %lu "
-			"%d %p %d%n",
+			"%d %pK %d%n",
 			sk->sk_protocol, pn->sobject, pn->dobject,
 			pn->resource, sk->sk_state,
 			sk_wmem_alloc_get(sk), sk_rmem_alloc_get(sk),
@@ -696,7 +696,7 @@ int pn_sock_unbind_res(struct sock *sk, u8 res)
 
 	mutex_lock(&resource_mutex);
 	if (pnres.sk[res] == sk) {
-		rcu_assign_pointer(pnres.sk[res], NULL);
+		RCU_INIT_POINTER(pnres.sk[res], NULL);
 		ret = 0;
 	}
 	mutex_unlock(&resource_mutex);
@@ -710,31 +710,29 @@ int pn_sock_unbind_res(struct sock *sk, u8 res)
 
 void pn_sock_unbind_all_res(struct sock *sk)
 {
-	unsigned res, match = 0;
+	unsigned int res, match = 0;
 
 	mutex_lock(&resource_mutex);
 	for (res = 0; res < 256; res++) {
 		if (pnres.sk[res] == sk) {
-			rcu_assign_pointer(pnres.sk[res], NULL);
+			RCU_INIT_POINTER(pnres.sk[res], NULL);
 			match++;
 		}
 	}
 	mutex_unlock(&resource_mutex);
 
-	if (match == 0)
-		return;
-	synchronize_rcu();
 	while (match > 0) {
-		sock_put(sk);
+		__sock_put(sk);
 		match--;
 	}
+	/* Caller is responsible for RCU sync before final sock_put() */
 }
 
 #ifdef CONFIG_PROC_FS
 static struct sock **pn_res_get_idx(struct seq_file *seq, loff_t pos)
 {
 	struct net *net = seq_file_net(seq);
-	unsigned i;
+	unsigned int i;
 
 	if (!net_eq(net, &init_net))
 		return NULL;
@@ -752,7 +750,7 @@ static struct sock **pn_res_get_idx(struct seq_file *seq, loff_t pos)
 static struct sock **pn_res_get_next(struct seq_file *seq, struct sock **sk)
 {
 	struct net *net = seq_file_net(seq);
-	unsigned i;
+	unsigned int i;
 
 	BUG_ON(!net_eq(net, &init_net));
 

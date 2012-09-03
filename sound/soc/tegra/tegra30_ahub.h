@@ -1,23 +1,19 @@
 /*
- * tegra30_ahub.h - Definitions for Tegra 30 AHUB driver
+ * tegra30_ahub.h - Definitions for Tegra30 AHUB driver
  *
- * Author: Stephen Warren <swarren@nvidia.com>
- * Copyright (C) 2011 - NVIDIA, Inc.
+ * Copyright (c) 2011,2012, NVIDIA CORPORATION.  All rights reserved.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
  *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __TEGRA30_AHUB_H__
@@ -211,7 +207,7 @@
 #define TEGRA30_AHUB_CONFIG_LINK_CTRL_TIMEOUT_CNT_SHIFT			16
 #define TEGRA30_AHUB_CONFIG_LINK_CTRL_TIMEOUT_CNT_MASK_US		0xfff
 #define TEGRA30_AHUB_CONFIG_LINK_CTRL_TIMEOUT_CNT_MASK			(TEGRA30_AHUB_CONFIG_LINK_CTRL_TIMEOUT_CNT_MASK_US << TEGRA30_AHUB_CONFIG_LINK_CTRL_TIMEOUT_CNT_SHIFT)
-#define TEGRA30_AHUB_CONFIG_LINK_CTRL_IDLE_CNT_SHIFT			5
+#define TEGRA30_AHUB_CONFIG_LINK_CTRL_IDLE_CNT_SHIFT			4
 #define TEGRA30_AHUB_CONFIG_LINK_CTRL_IDLE_CNT_MASK_US			0xfff
 #define TEGRA30_AHUB_CONFIG_LINK_CTRL_IDLE_CNT_MASK			(TEGRA30_AHUB_CONFIG_LINK_CTRL_IDLE_CNT_MASK_US << TEGRA30_AHUB_CONFIG_LINK_CTRL_IDLE_CNT_SHIFT)
 #define TEGRA30_AHUB_CONFIG_LINK_CTRL_CG_EN				(1 << 2)
@@ -222,7 +218,7 @@
 
 #define TEGRA30_AHUB_MISC_CTRL				0x84
 #define TEGRA30_AHUB_MISC_CTRL_AUDIO_ACTIVE		(1 << 31)
-#define TEGRA30_AHUB_MISC_CTRL_AUDIO_CG_EN		(1 << 9)
+#define TEGRA30_AHUB_MISC_CTRL_AUDIO_CG_EN		(1 << 8)
 #define TEGRA30_AHUB_MISC_CTRL_AUDIO_OBS_SEL_SHIFT	0
 #define TEGRA30_AHUB_MISC_CTRL_AUDIO_OBS_SEL_MASK	(0x1f << TEGRA30_AHUB_MISC_CTRL_AUDIO_OBS_SEL_SHIFT)
 
@@ -399,14 +395,6 @@
 /* This register repeats once for each entry in enum tegra30_ahub_rxcif */
 /* The fields in this register are 1 bit per entry in tegra30_ahub_txcif */
 
-/* apbif register count */
-#define TEGRA30_APBIF_CACHE_REG_COUNT_PER_CHANNEL		((TEGRA30_AHUB_CIF_RX_CTRL>>2) + 1)
-#define TEGRA30_APBIF_CACHE_REG_COUNT				((TEGRA30_APBIF_CACHE_REG_COUNT_PER_CHANNEL + 1) * TEGRA30_AHUB_CHANNEL_CTRL_COUNT)
-
-/* cache index to be skipped */
-#define TEGRA30_APBIF_CACHE_REG_INDEX_RSVD			TEGRA30_APBIF_CACHE_REG_COUNT_PER_CHANNEL
-#define TEGRA30_APBIF_CACHE_REG_INDEX_RSVD_STRIDE		(TEGRA30_APBIF_CACHE_REG_COUNT_PER_CHANNEL + 1)
-
 /*
  * Terminology:
  * AHUB: Audio Hub; a cross-bar switch between the audio devices: DMA FIFOs,
@@ -462,15 +450,9 @@ enum tegra30_ahub_rxcif {
 	TEGRA30_AHUB_RXCIF_SPDIF_RX1,
 };
 
-extern void tegra30_ahub_enable_clocks(void);
-extern void tegra30_ahub_disable_clocks(void);
-
 extern int tegra30_ahub_allocate_rx_fifo(enum tegra30_ahub_rxcif *rxcif,
 					 unsigned long *fiforeg,
 					 unsigned long *reqsel);
-extern int tegra30_ahub_set_rx_cif_channels(enum tegra30_ahub_rxcif rxcif,
-					    unsigned int audio_ch,
-					    unsigned int client_ch);
 extern int tegra30_ahub_enable_rx_fifo(enum tegra30_ahub_rxcif rxcif);
 extern int tegra30_ahub_disable_rx_fifo(enum tegra30_ahub_rxcif rxcif);
 extern int tegra30_ahub_free_rx_fifo(enum tegra30_ahub_rxcif rxcif);
@@ -478,9 +460,6 @@ extern int tegra30_ahub_free_rx_fifo(enum tegra30_ahub_rxcif rxcif);
 extern int tegra30_ahub_allocate_tx_fifo(enum tegra30_ahub_txcif *txcif,
 					 unsigned long *fiforeg,
 					 unsigned long *reqsel);
-extern int tegra30_ahub_set_tx_cif_channels(enum tegra30_ahub_txcif txcif,
-					    unsigned int audio_ch,
-					    unsigned int client_ch);
 extern int tegra30_ahub_enable_tx_fifo(enum tegra30_ahub_txcif txcif);
 extern int tegra30_ahub_disable_tx_fifo(enum tegra30_ahub_txcif txcif);
 extern int tegra30_ahub_free_tx_fifo(enum tegra30_ahub_txcif txcif);
@@ -489,24 +468,16 @@ extern int tegra30_ahub_set_rx_cif_source(enum tegra30_ahub_rxcif rxcif,
 					  enum tegra30_ahub_txcif txcif);
 extern int tegra30_ahub_unset_rx_cif_source(enum tegra30_ahub_rxcif rxcif);
 
-#ifdef CONFIG_PM
-extern int tegra30_ahub_apbif_resume(void);
-#endif
-
 struct tegra30_ahub {
 	struct device *dev;
 	struct clk *clk_d_audio;
 	struct clk *clk_apbif;
+	int dma_sel;
 	resource_size_t apbif_addr;
-	void __iomem *apbif_regs;
-	void __iomem *audio_regs;
+	struct regmap *regmap_apbif;
+	struct regmap *regmap_ahub;
 	DECLARE_BITMAP(rx_usage, TEGRA30_AHUB_CHANNEL_CTRL_COUNT);
 	DECLARE_BITMAP(tx_usage, TEGRA30_AHUB_CHANNEL_CTRL_COUNT);
-	struct dentry *debug;
-#ifdef CONFIG_PM
-	u32 ahub_reg_cache[TEGRA30_AHUB_AUDIO_RX_COUNT];
-	u32 apbif_reg_cache[TEGRA30_APBIF_CACHE_REG_COUNT];
-#endif
 };
 
 #endif

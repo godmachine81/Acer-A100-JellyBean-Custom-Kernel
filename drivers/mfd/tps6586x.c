@@ -23,13 +23,10 @@
 #include <linux/slab.h>
 #include <linux/gpio.h>
 #include <linux/i2c.h>
+#include <linux/regulator/of_regulator.h>
 
 #include <linux/mfd/core.h>
 #include <linux/mfd/tps6586x.h>
-
-#define TPS6586X_SUPPLYENE  0x14
-#define EXITSLREQ_BIT       BIT(1) /* Exit sleep mode request */
-#define SLEEP_MODE_BIT      BIT(3) /* Sleep mode */
 
 /* GPIO control registers */
 #define TPS6586X_GPIOSET1	0x5d
@@ -109,21 +106,17 @@ struct tps6586x {
 static inline int __tps6586x_read(struct i2c_client *client,
 				  int reg, uint8_t *val)
 {
-	int ret, i;
-	int retry = 10;
+	int ret;
 
-	for (i = 0; i < retry; i++) {
-		ret = i2c_smbus_read_byte_data(client, reg);
-		if (ret < 0) {
-			dev_err(&client->dev, "failed reading at 0x%02x, retry = %d\n", reg, i + 1);
-			continue;
-		} else {
-			*val = (uint8_t)ret;
-			return 0;
-		}
+	ret = i2c_smbus_read_byte_data(client, reg);
+	if (ret < 0) {
+		dev_err(&client->dev, "failed reading at 0x%02x\n", reg);
+		return ret;
 	}
 
-	return ret;
+	*val = (uint8_t)ret;
+
+	return 0;
 }
 
 static inline int __tps6586x_reads(struct i2c_client *client, int reg,
@@ -205,7 +198,7 @@ int tps6586x_set_bits(struct device *dev, int reg, uint8_t bit_mask)
 	if (ret)
 		goto out;
 
-	if ((reg_val & bit_mask) == 0) {
+	if ((reg_val & bit_mask) != bit_mask) {
 		reg_val |= bit_mask;
 		ret = __tps6586x_write(to_i2c_client(dev), reg, reg_val);
 	}
@@ -259,28 +252,6 @@ out:
 }
 EXPORT_SYMBOL_GPL(tps6586x_update);
 
-static struct i2c_client *tps6586x_i2c_client = NULL;
-int tps6586x_power_off(void)
-{
-	struct device *dev = NULL;
-	int ret = -EINVAL;
-
-	if (!tps6586x_i2c_client)
-		return ret;
-
-	dev = &tps6586x_i2c_client->dev;
-
-	ret = tps6586x_clr_bits(dev, TPS6586X_SUPPLYENE, EXITSLREQ_BIT);
-	if (ret)
-		return ret;
-
-	ret = tps6586x_set_bits(dev, TPS6586X_SUPPLYENE, SLEEP_MODE_BIT);
-	if (ret)
-		return ret;
-
-	return 0;
-}
-
 static int tps6586x_gpio_get(struct gpio_chip *gc, unsigned offset)
 {
 	struct tps6586x *tps6586x = container_of(gc, struct tps6586x, gpio);
@@ -304,24 +275,13 @@ static void tps6586x_gpio_set(struct gpio_chip *chip, unsigned offset,
 			value << offset, 1 << offset);
 }
 
-static int tps6586x_gpio_input(struct gpio_chip *gc, unsigned offset)
-{
-	/* FIXME: add handling of GPIOs as dedicated inputs */
-	return -ENOSYS;
-}
-
 static int tps6586x_gpio_output(struct gpio_chip *gc, unsigned offset,
 				int value)
 {
 	struct tps6586x *tps6586x = container_of(gc, struct tps6586x, gpio);
 	uint8_t val, mask;
-	int ret;
 
-	val = value << offset;
-	mask = 0x1 << offset;
-	ret = tps6586x_update(tps6586x->dev, TPS6586X_GPIOSET2, val, mask);
-	if (ret)
-		return ret;
+	tps6586x_gpio_set(gc, offset, value);
 
 	val = 0x1 << (offset * 2);
 	mask = 0x3 << (offset * 2);
@@ -341,7 +301,7 @@ static int tps6586x_gpio_init(struct tps6586x *tps6586x, int gpio_base)
 	tps6586x->gpio.ngpio		= 4;
 	tps6586x->gpio.can_sleep	= 1;
 
-	tps6586x->gpio.direction_input	= tps6586x_gpio_input;
+	/* FIXME: add handling of GPIOs as dedicated inputs */
 	tps6586x->gpio.direction_output	= tps6586x_gpio_output;
 	tps6586x->gpio.set		= tps6586x_gpio_set;
 	tps6586x->gpio.get		= tps6586x_gpio_get;
@@ -410,15 +370,6 @@ static irqreturn_t tps6586x_irq(int irq, void *data)
 	struct tps6586x *tps6586x = data;
 	u32 acks;
 	int ret = 0;
-	char *irq_info[] = {"TPS6586X_INT_PLDO_0", "TPS6586X_INT_PLDO_1", "TPS6586X_INT_PLDO_2",
-		"TPS6586X_INT_PLDO_3", "TPS6586X_INT_PLDO_4", "TPS6586X_INT_PLDO_5",
-		"TPS6586X_INT_PLDO_6", "TPS6586X_INT_PLDO_7", "TPS6586X_INT_COMP_DET",
-		"TPS6586X_INT_ADC", "TPS6586X_INT_PLDO_8", "TPS6586X_INT_PLDO_9",
-		"TPS6586X_INT_PSM_0", "TPS6586X_INT_PSM_1", "TPS6586X_INT_PSM_2",
-		"TPS6586X_INT_PSM_3", "TPS6586X_INT_RTC_ALM1", "TPS6586X_INT_ACUSB_OVP",
-		"TPS6586X_INT_USB_DET", "TPS6586X_INT_AC_DET", "TPS6586X_INT_BAT_DET",
-		"TPS6586X_INT_CHG_STAT", "TPS6586X_INT_CHG_TEMP", "TPS6586X_INT_PP",
-		"TPS6586X_INT_RESUME", "TPS6586X_INT_LOW_SYS", "TPS6586X_INT_RTC_ALM2"};
 
 	ret = tps6586x_reads(tps6586x->dev, TPS6586X_INT_ACK1,
 			     sizeof(acks), (uint8_t *)&acks);
@@ -433,10 +384,8 @@ static irqreturn_t tps6586x_irq(int irq, void *data)
 	while (acks) {
 		int i = __ffs(acks);
 
-		if (tps6586x->irq_en & (1 << i)) {
+		if (tps6586x->irq_en & (1 << i))
 			handle_nested_irq(tps6586x->irq_base + i);
-			dev_info(tps6586x->dev, "tps6586x interrupt source : %s\n", irq_info[i]);
-		}
 
 		acks &= ~(1 << i);
 	}
@@ -512,6 +461,7 @@ static int __devinit tps6586x_add_subdevs(struct tps6586x *tps6586x,
 
 		pdev->dev.parent = tps6586x->dev;
 		pdev->dev.platform_data = subdev->platform_data;
+		pdev->dev.of_node = subdev->of_node;
 
 		ret = platform_device_add(pdev);
 		if (ret) {
@@ -526,12 +476,95 @@ failed:
 	return ret;
 }
 
+#ifdef CONFIG_OF
+static struct of_regulator_match tps6586x_matches[] = {
+	{ .name = "sm0",     .driver_data = (void *)TPS6586X_ID_SM_0    },
+	{ .name = "sm1",     .driver_data = (void *)TPS6586X_ID_SM_1    },
+	{ .name = "sm2",     .driver_data = (void *)TPS6586X_ID_SM_2    },
+	{ .name = "ldo0",    .driver_data = (void *)TPS6586X_ID_LDO_0   },
+	{ .name = "ldo1",    .driver_data = (void *)TPS6586X_ID_LDO_1   },
+	{ .name = "ldo2",    .driver_data = (void *)TPS6586X_ID_LDO_2   },
+	{ .name = "ldo3",    .driver_data = (void *)TPS6586X_ID_LDO_3   },
+	{ .name = "ldo4",    .driver_data = (void *)TPS6586X_ID_LDO_4   },
+	{ .name = "ldo5",    .driver_data = (void *)TPS6586X_ID_LDO_5   },
+	{ .name = "ldo6",    .driver_data = (void *)TPS6586X_ID_LDO_6   },
+	{ .name = "ldo7",    .driver_data = (void *)TPS6586X_ID_LDO_7   },
+	{ .name = "ldo8",    .driver_data = (void *)TPS6586X_ID_LDO_8   },
+	{ .name = "ldo9",    .driver_data = (void *)TPS6586X_ID_LDO_9   },
+	{ .name = "ldo_rtc", .driver_data = (void *)TPS6586X_ID_LDO_RTC },
+};
+
+static struct tps6586x_platform_data *tps6586x_parse_dt(struct i2c_client *client)
+{
+	const unsigned int num = ARRAY_SIZE(tps6586x_matches);
+	struct device_node *np = client->dev.of_node;
+	struct tps6586x_platform_data *pdata;
+	struct tps6586x_subdev_info *devs;
+	struct device_node *regs;
+	unsigned int count;
+	unsigned int i, j;
+	int err;
+
+	regs = of_find_node_by_name(np, "regulators");
+	if (!regs)
+		return NULL;
+
+	err = of_regulator_match(&client->dev, regs, tps6586x_matches, num);
+	if (err < 0) {
+		of_node_put(regs);
+		return NULL;
+	}
+
+	of_node_put(regs);
+	count = err;
+
+	devs = devm_kzalloc(&client->dev, count * sizeof(*devs), GFP_KERNEL);
+	if (!devs)
+		return NULL;
+
+	for (i = 0, j = 0; i < num && j < count; i++) {
+		if (!tps6586x_matches[i].init_data)
+			continue;
+
+		devs[j].name = "tps6586x-regulator";
+		devs[j].platform_data = tps6586x_matches[i].init_data;
+		devs[j].id = (int)tps6586x_matches[i].driver_data;
+		devs[j].of_node = tps6586x_matches[i].of_node;
+		j++;
+	}
+
+	pdata = devm_kzalloc(&client->dev, sizeof(*pdata), GFP_KERNEL);
+	if (!pdata)
+		return NULL;
+
+	pdata->num_subdevs = count;
+	pdata->subdevs = devs;
+	pdata->gpio_base = -1;
+	pdata->irq_base = -1;
+
+	return pdata;
+}
+
+static struct of_device_id tps6586x_of_match[] = {
+	{ .compatible = "ti,tps6586x", },
+	{ },
+};
+#else
+static struct tps6586x_platform_data *tps6586x_parse_dt(struct i2c_client *client)
+{
+	return NULL;
+}
+#endif
+
 static int __devinit tps6586x_i2c_probe(struct i2c_client *client,
 					const struct i2c_device_id *id)
 {
 	struct tps6586x_platform_data *pdata = client->dev.platform_data;
 	struct tps6586x *tps6586x;
 	int ret;
+
+	if (!pdata && client->dev.of_node)
+		pdata = tps6586x_parse_dt(client);
 
 	if (!pdata) {
 		dev_err(&client->dev, "tps6586x requires platform data\n");
@@ -576,11 +609,6 @@ static int __devinit tps6586x_i2c_probe(struct i2c_client *client,
 		dev_err(&client->dev, "add devices failed: %d\n", ret);
 		goto err_add_devs;
 	}
-
-	tps6586x_i2c_client = client;
-
-	/* Using external oscillator... */
-	tps6586x_set_bits(&client->dev, 0xc0, 0x40);
 
 	return 0;
 
@@ -630,6 +658,7 @@ static struct i2c_driver tps6586x_driver = {
 	.driver	= {
 		.name	= "tps6586x",
 		.owner	= THIS_MODULE,
+		.of_match_table = of_match_ptr(tps6586x_of_match),
 	},
 	.probe		= tps6586x_i2c_probe,
 	.remove		= __devexit_p(tps6586x_i2c_remove),

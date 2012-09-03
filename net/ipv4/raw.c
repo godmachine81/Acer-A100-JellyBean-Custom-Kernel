@@ -38,7 +38,7 @@
  */
 
 #include <linux/types.h>
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/byteorder.h>
 #include <asm/current.h>
 #include <asm/uaccess.h>
@@ -48,6 +48,7 @@
 #include <linux/errno.h>
 #include <linux/aio.h>
 #include <linux/kernel.h>
+#include <linux/export.h>
 #include <linux/spinlock.h>
 #include <linux/sockios.h>
 #include <linux/socket.h>
@@ -154,7 +155,7 @@ static __inline__ int icmp_filter(struct sock *sk, struct sk_buff *skb)
  * RFC 1122: SHOULD pass TOS value up to the transport layer.
  * -> It does. And not only TOS, but all IP header.
  */
-static int raw_v4_input(struct sk_buff *skb, struct iphdr *iph, int hash)
+static int raw_v4_input(struct sk_buff *skb, const struct iphdr *iph, int hash)
 {
 	struct sock *sk;
 	struct hlist_head *head;
@@ -247,7 +248,7 @@ static void raw_err(struct sock *sk, struct sk_buff *skb, u32 info)
 	}
 
 	if (inet->recverr) {
-		struct iphdr *iph = (struct iphdr *)skb->data;
+		const struct iphdr *iph = (const struct iphdr *)skb->data;
 		u8 *payload = skb->data + (iph->ihl << 2);
 
 		if (inet->hdrincl)
@@ -265,7 +266,7 @@ void raw_icmp_error(struct sk_buff *skb, int protocol, u32 info)
 {
 	int hash;
 	struct sock *raw_sk;
-	struct iphdr *iph;
+	const struct iphdr *iph;
 	struct net *net;
 
 	hash = protocol & (RAW_HTABLE_SIZE - 1);
@@ -273,7 +274,7 @@ void raw_icmp_error(struct sk_buff *skb, int protocol, u32 info)
 	read_lock(&raw_v4_hashinfo.lock);
 	raw_sk = sk_head(&raw_v4_hashinfo.ht[hash]);
 	if (raw_sk != NULL) {
-		iph = (struct iphdr *)skb->data;
+		iph = (const struct iphdr *)skb->data;
 		net = dev_net(skb->dev);
 
 		while ((raw_sk = __raw_v4_lookup(net, raw_sk, protocol,
@@ -281,17 +282,18 @@ void raw_icmp_error(struct sk_buff *skb, int protocol, u32 info)
 						skb->dev->ifindex)) != NULL) {
 			raw_err(raw_sk, skb, info);
 			raw_sk = sk_next(raw_sk);
-			iph = (struct iphdr *)skb->data;
+			iph = (const struct iphdr *)skb->data;
 		}
 	}
 	read_unlock(&raw_v4_hashinfo.lock);
 }
 
-static int raw_rcv_skb(struct sock * sk, struct sk_buff * skb)
+static int raw_rcv_skb(struct sock *sk, struct sk_buff *skb)
 {
 	/* Charge it to the socket. */
 
-	if (ip_queue_rcv_skb(sk, skb) < 0) {
+	ipv4_pktinfo_prepare(skb);
+	if (sock_queue_rcv_skb(sk, skb) < 0) {
 		kfree_skb(skb);
 		return NET_RX_DROP;
 	}
@@ -314,9 +316,10 @@ int raw_rcv(struct sock *sk, struct sk_buff *skb)
 	return 0;
 }
 
-static int raw_send_hdrinc(struct sock *sk, void *from, size_t length,
-			struct rtable **rtp,
-			unsigned int flags)
+static int raw_send_hdrinc(struct sock *sk, struct flowi4 *fl4,
+			   void *from, size_t length,
+			   struct rtable **rtp,
+			   unsigned int flags)
 {
 	struct inet_sock *inet = inet_sk(sk);
 	struct net *net = sock_net(sk);
@@ -325,21 +328,24 @@ static int raw_send_hdrinc(struct sock *sk, void *from, size_t length,
 	unsigned int iphlen;
 	int err;
 	struct rtable *rt = *rtp;
+	int hlen, tlen;
 
 	if (length > rt->dst.dev->mtu) {
-		ip_local_error(sk, EMSGSIZE, rt->rt_dst, inet->inet_dport,
+		ip_local_error(sk, EMSGSIZE, fl4->daddr, inet->inet_dport,
 			       rt->dst.dev->mtu);
 		return -EMSGSIZE;
 	}
 	if (flags&MSG_PROBE)
 		goto out;
 
+	hlen = LL_RESERVED_SPACE(rt->dst.dev);
+	tlen = rt->dst.dev->needed_tailroom;
 	skb = sock_alloc_send_skb(sk,
-				  length + LL_ALLOCATED_SPACE(rt->dst.dev) + 15,
+				  length + hlen + tlen + 15,
 				  flags & MSG_DONTWAIT, &err);
 	if (skb == NULL)
 		goto error;
-	skb_reserve(skb, LL_RESERVED_SPACE(rt->dst.dev));
+	skb_reserve(skb, hlen);
 
 	skb->priority = sk->sk_priority;
 	skb->mark = sk->sk_mark;
@@ -372,7 +378,7 @@ static int raw_send_hdrinc(struct sock *sk, void *from, size_t length,
 
 	if (iphlen >= sizeof(*iph)) {
 		if (!iph->saddr)
-			iph->saddr = rt->rt_src;
+			iph->saddr = fl4->saddr;
 		iph->check   = 0;
 		iph->tot_len = htons(length);
 		if (!iph->id)
@@ -455,11 +461,13 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	struct inet_sock *inet = inet_sk(sk);
 	struct ipcm_cookie ipc;
 	struct rtable *rt = NULL;
+	struct flowi4 fl4;
 	int free = 0;
 	__be32 daddr;
 	__be32 saddr;
 	u8  tos;
 	int err;
+	struct ip_options_data opt_copy;
 
 	err = -EMSGSIZE;
 	if (len > 0xFFFF)
@@ -483,11 +491,8 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		if (msg->msg_namelen < sizeof(*usin))
 			goto out;
 		if (usin->sin_family != AF_INET) {
-			static int complained;
-			if (!complained++)
-				printk(KERN_INFO "%s forgot to set AF_INET in "
-						 "raw sendmsg. Fix it!\n",
-						 current->comm);
+			pr_info_once("%s: %s forgot to set AF_INET. Fix it!\n",
+				     __func__, current->comm);
 			err = -EAFNOSUPPORT;
 			if (usin->sin_family)
 				goto out;
@@ -520,8 +525,18 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	saddr = ipc.addr;
 	ipc.addr = daddr;
 
-	if (!ipc.opt)
-		ipc.opt = inet->opt;
+	if (!ipc.opt) {
+		struct ip_options_rcu *inet_opt;
+
+		rcu_read_lock();
+		inet_opt = rcu_dereference(inet->inet_opt);
+		if (inet_opt) {
+			memcpy(&opt_copy, inet_opt,
+			       sizeof(*inet_opt) + inet_opt->opt.optlen);
+			ipc.opt = &opt_copy.opt;
+		}
+		rcu_read_unlock();
+	}
 
 	if (ipc.opt) {
 		err = -EINVAL;
@@ -530,10 +545,10 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		 */
 		if (inet->hdrincl)
 			goto done;
-		if (ipc.opt->srr) {
+		if (ipc.opt->opt.srr) {
 			if (!daddr)
 				goto done;
-			daddr = ipc.opt->faddr;
+			daddr = ipc.opt->opt.faddr;
 		}
 	}
 	tos = RT_CONN_FLAGS(sk);
@@ -545,33 +560,27 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 			ipc.oif = inet->mc_index;
 		if (!saddr)
 			saddr = inet->mc_addr;
+	} else if (!ipc.oif)
+		ipc.oif = inet->uc_index;
+
+	flowi4_init_output(&fl4, ipc.oif, sk->sk_mark, tos,
+			   RT_SCOPE_UNIVERSE,
+			   inet->hdrincl ? IPPROTO_RAW : sk->sk_protocol,
+			   inet_sk_flowi_flags(sk) | FLOWI_FLAG_CAN_SLEEP,
+			   daddr, saddr, 0, 0);
+
+	if (!inet->hdrincl) {
+		err = raw_probe_proto_opt(&fl4, msg);
+		if (err)
+			goto done;
 	}
 
-	{
-		struct flowi4 fl4 = {
-			.flowi4_oif = ipc.oif,
-			.flowi4_mark = sk->sk_mark,
-			.daddr = daddr,
-			.saddr = saddr,
-			.flowi4_tos = tos,
-			.flowi4_proto = (inet->hdrincl ?
-					 IPPROTO_RAW :
-					 sk->sk_protocol),
-			.flowi4_flags = FLOWI_FLAG_CAN_SLEEP,
-		};
-		if (!inet->hdrincl) {
-			err = raw_probe_proto_opt(&fl4, msg);
-			if (err)
-				goto done;
-		}
-
-		security_sk_classify_flow(sk, flowi4_to_flowi(&fl4));
-		rt = ip_route_output_flow(sock_net(sk), &fl4, sk);
-		if (IS_ERR(rt)) {
-			err = PTR_ERR(rt);
-			rt = NULL;
-			goto done;
-		}
+	security_sk_classify_flow(sk, flowi4_to_flowi(&fl4));
+	rt = ip_route_output_flow(sock_net(sk), &fl4, sk);
+	if (IS_ERR(rt)) {
+		err = PTR_ERR(rt);
+		rt = NULL;
+		goto done;
 	}
 
 	err = -EACCES;
@@ -583,19 +592,20 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 back_from_confirm:
 
 	if (inet->hdrincl)
-		err = raw_send_hdrinc(sk, msg->msg_iov, len,
-					&rt, msg->msg_flags);
+		err = raw_send_hdrinc(sk, &fl4, msg->msg_iov, len,
+				      &rt, msg->msg_flags);
 
 	 else {
 		if (!ipc.addr)
-			ipc.addr = rt->rt_dst;
+			ipc.addr = fl4.daddr;
 		lock_sock(sk);
-		err = ip_append_data(sk, ip_generic_getfrag, msg->msg_iov, len, 0,
-					&ipc, &rt, msg->msg_flags);
+		err = ip_append_data(sk, &fl4, ip_generic_getfrag,
+				     msg->msg_iov, len, 0,
+				     &ipc, &rt, msg->msg_flags);
 		if (err)
 			ip_flush_pending_frames(sk);
 		else if (!(msg->msg_flags & MSG_MORE)) {
-			err = ip_push_pending_frames(sk);
+			err = ip_push_pending_frames(sk, &fl4);
 			if (err == -ENOBUFS && !inet->recverr)
 				err = 0;
 		}
@@ -819,28 +829,28 @@ static int compat_raw_getsockopt(struct sock *sk, int level, int optname,
 static int raw_ioctl(struct sock *sk, int cmd, unsigned long arg)
 {
 	switch (cmd) {
-		case SIOCOUTQ: {
-			int amount = sk_wmem_alloc_get(sk);
+	case SIOCOUTQ: {
+		int amount = sk_wmem_alloc_get(sk);
 
-			return put_user(amount, (int __user *)arg);
-		}
-		case SIOCINQ: {
-			struct sk_buff *skb;
-			int amount = 0;
+		return put_user(amount, (int __user *)arg);
+	}
+	case SIOCINQ: {
+		struct sk_buff *skb;
+		int amount = 0;
 
-			spin_lock_bh(&sk->sk_receive_queue.lock);
-			skb = skb_peek(&sk->sk_receive_queue);
-			if (skb != NULL)
-				amount = skb->len;
-			spin_unlock_bh(&sk->sk_receive_queue.lock);
-			return put_user(amount, (int __user *)arg);
-		}
+		spin_lock_bh(&sk->sk_receive_queue.lock);
+		skb = skb_peek(&sk->sk_receive_queue);
+		if (skb != NULL)
+			amount = skb->len;
+		spin_unlock_bh(&sk->sk_receive_queue.lock);
+		return put_user(amount, (int __user *)arg);
+	}
 
-		default:
+	default:
 #ifdef CONFIG_IP_MROUTE
-			return ipmr_ioctl(sk, cmd, (void __user *)arg);
+		return ipmr_ioctl(sk, cmd, (void __user *)arg);
 #else
-			return -ENOIOCTLCMD;
+		return -ENOIOCTLCMD;
 #endif
 	}
 }
@@ -973,7 +983,7 @@ static void raw_sock_seq_show(struct seq_file *seq, struct sock *sp, int i)
 	      srcp  = inet->inet_num;
 
 	seq_printf(seq, "%4d: %08X:%04X %08X:%04X"
-		" %02X %08X:%08X %02X:%08lX %08X %5d %8d %lu %d %p %d\n",
+		" %02X %08X:%08X %02X:%08lX %08X %5d %8d %lu %d %pK %d\n",
 		i, src, srcp, dest, destp, sp->sk_state,
 		sk_wmem_alloc_get(sp),
 		sk_rmem_alloc_get(sp),

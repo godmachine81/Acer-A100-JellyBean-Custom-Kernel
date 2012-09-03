@@ -44,7 +44,6 @@ struct vr_nor_mtd {
 	void __iomem *csr_base;
 	struct map_info map;
 	struct mtd_info *info;
-	int nr_parts;
 	struct pci_dev *dev;
 };
 
@@ -66,33 +65,14 @@ struct vr_nor_mtd {
 
 static void __devexit vr_nor_destroy_partitions(struct vr_nor_mtd *p)
 {
-	if (p->nr_parts > 0) {
-#if defined(CONFIG_MTD_PARTITIONS) || defined(CONFIG_MTD_PARTITIONS_MODULE)
-		del_mtd_partitions(p->info);
-#endif
-	} else
-		del_mtd_device(p->info);
+	mtd_device_unregister(p->info);
 }
 
 static int __devinit vr_nor_init_partitions(struct vr_nor_mtd *p)
 {
-	int err = 0;
-#if defined(CONFIG_MTD_PARTITIONS) || defined(CONFIG_MTD_PARTITIONS_MODULE)
-	struct mtd_partition *parts;
-	static const char *part_probes[] = { "cmdlinepart", NULL };
-#endif
-
 	/* register the flash bank */
-#if defined(CONFIG_MTD_PARTITIONS) || defined(CONFIG_MTD_PARTITIONS_MODULE)
 	/* partition the flash bank */
-	p->nr_parts = parse_mtd_partitions(p->info, part_probes, &parts, 0);
-	if (p->nr_parts > 0)
-		err = add_mtd_partitions(p->info, parts, p->nr_parts);
-#endif
-	if (p->nr_parts <= 0)
-		err = add_mtd_device(p->info);
-
-	return err;
+	return mtd_device_parse_register(p->info, NULL, NULL, NULL, 0);
 }
 
 static void __devexit vr_nor_destroy_mtd_setup(struct vr_nor_mtd *p)
@@ -280,18 +260,7 @@ static struct pci_driver vr_nor_pci_driver = {
 	.id_table = vr_nor_pci_ids,
 };
 
-static int __init vr_nor_mtd_init(void)
-{
-	return pci_register_driver(&vr_nor_pci_driver);
-}
-
-static void __exit vr_nor_mtd_exit(void)
-{
-	pci_unregister_driver(&vr_nor_pci_driver);
-}
-
-module_init(vr_nor_mtd_init);
-module_exit(vr_nor_mtd_exit);
+module_pci_driver(vr_nor_pci_driver);
 
 MODULE_AUTHOR("Andy Lowe");
 MODULE_DESCRIPTION("MTD map driver for NOR flash on Intel Vermilion Range");

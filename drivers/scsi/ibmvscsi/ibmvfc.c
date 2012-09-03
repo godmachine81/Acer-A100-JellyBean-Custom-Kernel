@@ -4306,8 +4306,8 @@ static void ibmvfc_do_work(struct ibmvfc_host *vhost)
 		spin_lock_irqsave(vhost->host->host_lock, flags);
 		if (rc == H_CLOSED)
 			vio_enable_interrupts(to_vio_dev(vhost->dev));
-		else if (rc || (rc = ibmvfc_send_crq_init(vhost)) ||
-			 (rc = vio_enable_interrupts(to_vio_dev(vhost->dev)))) {
+		if (rc || (rc = ibmvfc_send_crq_init(vhost)) ||
+		    (rc = vio_enable_interrupts(to_vio_dev(vhost->dev)))) {
 			ibmvfc_link_down(vhost, IBMVFC_LINK_DEAD);
 			dev_err(vhost->dev, "Error after reset (rc=%d)\n", rc);
 		}
@@ -4890,11 +4890,8 @@ static struct vio_driver ibmvfc_driver = {
 	.probe = ibmvfc_probe,
 	.remove = ibmvfc_remove,
 	.get_desired_dma = ibmvfc_get_desired_dma,
-	.driver = {
-		.name = IBMVFC_NAME,
-		.owner = THIS_MODULE,
-		.pm = &ibmvfc_pm_ops,
-	}
+	.name = IBMVFC_NAME,
+	.pm = &ibmvfc_pm_ops,
 };
 
 static struct fc_function_template ibmvfc_transport_functions = {

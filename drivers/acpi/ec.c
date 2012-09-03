@@ -69,7 +69,6 @@ enum ec_command {
 
 #define ACPI_EC_DELAY		500	/* Wait 500ms max. during EC ops */
 #define ACPI_EC_UDELAY_GLK	1000	/* Wait 1ms max. to get global lock */
-#define ACPI_EC_CDELAY		10	/* Wait 10us before polling EC */
 #define ACPI_EC_MSI_UDELAY	550	/* Wait 550us for MSI EC */
 
 #define ACPI_EC_STORM_THRESHOLD 8	/* number of false interrupts
@@ -433,8 +432,7 @@ EXPORT_SYMBOL(ec_write);
 
 int ec_transaction(u8 command,
 		   const u8 * wdata, unsigned wdata_len,
-		   u8 * rdata, unsigned rdata_len,
-		   int force_poll)
+		   u8 * rdata, unsigned rdata_len)
 {
 	struct transaction t = {.command = command,
 				.wdata = wdata, .rdata = rdata,
@@ -446,6 +444,16 @@ int ec_transaction(u8 command,
 }
 
 EXPORT_SYMBOL(ec_transaction);
+
+/* Get the handle to the EC device */
+acpi_handle ec_get_handle(void)
+{
+	if (!first_ec)
+		return NULL;
+	return first_ec->handle;
+}
+
+EXPORT_SYMBOL(ec_get_handle);
 
 void acpi_ec_block_transactions(void)
 {
@@ -591,8 +599,6 @@ static void acpi_ec_gpe_query(void *ec_cxt)
 	acpi_ec_sync_query(ec);
 	mutex_unlock(&ec->lock);
 }
-
-static void acpi_ec_gpe_query(void *ec_cxt);
 
 static int ec_check_sci(struct acpi_ec *ec, u8 state)
 {
@@ -808,8 +814,6 @@ static int acpi_ec_add(struct acpi_device *device)
 			return -EINVAL;
 	}
 
-	ec->handle = device->handle;
-
 	/* Find and register all query methods */
 	acpi_walk_namespace(ACPI_TYPE_METHOD, ec->handle, 1,
 			    acpi_ec_register_query_methods, NULL, ec, NULL);
@@ -818,10 +822,10 @@ static int acpi_ec_add(struct acpi_device *device)
 		first_ec = ec;
 	device->driver_data = ec;
 
-	WARN(!request_region(ec->data_addr, 1, "EC data"),
-	     "Could not request EC data io port 0x%lx", ec->data_addr);
-	WARN(!request_region(ec->command_addr, 1, "EC cmd"),
-	     "Could not request EC cmd io port 0x%lx", ec->command_addr);
+	ret = !!request_region(ec->data_addr, 1, "EC data");
+	WARN(!ret, "Could not request EC data io port 0x%lx", ec->data_addr);
+	ret = !!request_region(ec->command_addr, 1, "EC cmd");
+	WARN(!ret, "Could not request EC cmd io port 0x%lx", ec->command_addr);
 
 	pr_info(PREFIX "GPE = 0x%lx, I/O: command/status = 0x%lx, data = 0x%lx\n",
 			  ec->gpe, ec->command_addr, ec->data_addr);
@@ -938,8 +942,19 @@ static struct dmi_system_id __initdata ec_dmi_table[] = {
 	ec_flag_msi, "MSI hardware", {
 	DMI_MATCH(DMI_CHASSIS_VENDOR, "MICRO-STAR")}, NULL},
 	{
+	ec_flag_msi, "Quanta hardware", {
+	DMI_MATCH(DMI_SYS_VENDOR, "Quanta"),
+	DMI_MATCH(DMI_PRODUCT_NAME, "TW8/SW8/DW8"),}, NULL},
+	{
+	ec_flag_msi, "Quanta hardware", {
+	DMI_MATCH(DMI_SYS_VENDOR, "Quanta"),
+	DMI_MATCH(DMI_PRODUCT_NAME, "TW9/SW9"),}, NULL},
+	{
 	ec_validate_ecdt, "ASUS hardware", {
 	DMI_MATCH(DMI_BIOS_VENDOR, "ASUS") }, NULL},
+	{
+	ec_validate_ecdt, "ASUS hardware", {
+	DMI_MATCH(DMI_BOARD_VENDOR, "ASUSTeK Computer Inc.") }, NULL},
 	{},
 };
 

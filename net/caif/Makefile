@@ -5,10 +5,11 @@ caif-y := caif_dev.o \
 	cffrml.o cfveil.o cfdbgl.o\
 	cfserl.o cfdgml.o  \
 	cfrfml.o cfvidl.o cfutill.o \
-	cfsrvl.o cfpkt_skbuff.o caif_config_util.o
+	cfsrvl.o cfpkt_skbuff.o
 
 obj-$(CONFIG_CAIF) += caif.o
 obj-$(CONFIG_CAIF_NETDEV) += chnl_net.o
 obj-$(CONFIG_CAIF) += caif_socket.o
+obj-$(CONFIG_CAIF_USB) += caif_usb.o
 
 export-y := caif.o

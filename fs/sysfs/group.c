@@ -33,7 +33,7 @@ static int create_files(struct sysfs_dirent *dir_sd, struct kobject *kobj,
 	int error = 0, i;
 
 	for (i = 0, attr = grp->attrs; *attr && !error; i++, attr++) {
-		mode_t mode = 0;
+		umode_t mode = 0;
 
 		/* in update mode, we're changing the permissions or
 		 * visibility.  Do this by first removing then
@@ -67,7 +67,11 @@ static int internal_create_group(struct kobject *kobj, int update,
 	/* Updates may happen before the object has been instantiated */
 	if (unlikely(update && !kobj->sd))
 		return -EINVAL;
-
+	if (!grp->attrs) {
+		WARN(1, "sysfs: attrs not set by subsystem for group: %s/%s\n",
+			kobj->name, grp->name ? "" : grp->name);
+		return -EINVAL;
+	}
 	if (grp->name) {
 		error = sysfs_create_subdir(kobj, grp->name, &sd);
 		if (error)
@@ -101,9 +105,9 @@ int sysfs_create_group(struct kobject *kobj,
 }
 
 /**
- * sysfs_update_group - given a directory kobject, create an attribute group
- * @kobj:	The kobject to create the group on
- * @grp:	The attribute group to create
+ * sysfs_update_group - given a directory kobject, update an attribute group
+ * @kobj:	The kobject to update the group on
+ * @grp:	The attribute group to update
  *
  * This function updates an attribute group.  Unlike
  * sysfs_create_group(), it will explicitly not warn or error if any

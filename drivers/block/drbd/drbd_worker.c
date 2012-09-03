@@ -70,11 +70,29 @@ rwlock_t global_state_lock;
 void drbd_md_io_complete(struct bio *bio, int error)
 {
 	struct drbd_md_io *md_io;
+	struct drbd_conf *mdev;
 
 	md_io = (struct drbd_md_io *)bio->bi_private;
+	mdev = container_of(md_io, struct drbd_conf, md_io);
+
 	md_io->error = error;
 
-	complete(&md_io->event);
+	/* We grabbed an extra reference in _drbd_md_sync_page_io() to be able
+	 * to timeout on the lower level device, and eventually detach from it.
+	 * If this io completion runs after that timeout expired, this
+	 * drbd_md_put_buffer() may allow us to finally try and re-attach.
+	 * During normal operation, this only puts that extra reference
+	 * down to 1 again.
+	 * Make sure we first drop the reference, and only then signal
+	 * completion, or we may (in drbd_al_read_log()) cycle so fast into the
+	 * next drbd_md_sync_page_io(), that we trigger the
+	 * ASSERT(atomic_read(&mdev->md_io_in_use) == 1) there.
+	 */
+	drbd_md_put_buffer(mdev);
+	md_io->done = 1;
+	wake_up(&mdev->misc_wait);
+	bio_put(bio);
+	put_ldev(mdev);
 }
 
 /* reads on behalf of the partner,
@@ -126,7 +144,7 @@ static void drbd_endio_write_sec_final(struct drbd_epoch_entry *e) __releases(lo
 	list_del(&e->w.list); /* has been on active_ee or sync_ee */
 	list_add_tail(&e->w.list, &mdev->done_ee);
 
-	/* No hlist_del_init(&e->colision) here, we did not send the Ack yet,
+	/* No hlist_del_init(&e->collision) here, we did not send the Ack yet,
 	 * neither did we wake possibly waiting conflicting requests.
 	 * done from "drbd_process_done_ee" within the appropriate w.cb
 	 * (e_end_block/e_end_resync_block) or from _drbd_clear_done_ee */
@@ -226,6 +244,7 @@ void drbd_endio_pri(struct bio *bio, int error)
 	spin_lock_irqsave(&mdev->req_lock, flags);
 	__req_mod(req, what, &m);
 	spin_unlock_irqrestore(&mdev->req_lock, flags);
+	put_ldev(mdev);
 
 	if (m.bio)
 		complete_master_bio(mdev, &m);
@@ -290,49 +309,55 @@ void drbd_csum_bio(struct drbd_conf *mdev, struct crypto_hash *tfm, struct bio *
 	sg_init_table(&sg, 1);
 	crypto_hash_init(&desc);
 
-	__bio_for_each_segment(bvec, bio, i, 0) {
+	bio_for_each_segment(bvec, bio, i) {
 		sg_set_page(&sg, bvec->bv_page, bvec->bv_len, bvec->bv_offset);
 		crypto_hash_update(&desc, &sg, sg.length);
 	}
 	crypto_hash_final(&desc, digest);
 }
 
-static int w_e_send_csum(struct drbd_conf *mdev, struct drbd_work *w, int cancel)
+/* TODO merge common code with w_e_end_ov_req */
+int w_e_send_csum(struct drbd_conf *mdev, struct drbd_work *w, int cancel)
 {
 	struct drbd_epoch_entry *e = container_of(w, struct drbd_epoch_entry, w);
 	int digest_size;
 	void *digest;
-	int ok;
+	int ok = 1;
 
 	D_ASSERT(e->block_id == DRBD_MAGIC + 0xbeef);
 
-	if (unlikely(cancel)) {
+	if (unlikely(cancel))
+		goto out;
+
+	if (likely((e->flags & EE_WAS_ERROR) != 0))
+		goto out;
+
+	digest_size = crypto_hash_digestsize(mdev->csums_tfm);
+	digest = kmalloc(digest_size, GFP_NOIO);
+	if (digest) {
+		sector_t sector = e->sector;
+		unsigned int size = e->size;
+		drbd_csum_ee(mdev, mdev->csums_tfm, e, digest);
+		/* Free e and pages before send.
+		 * In case we block on congestion, we could otherwise run into
+		 * some distributed deadlock, if the other side blocks on
+		 * congestion as well, because our receiver blocks in
+		 * drbd_pp_alloc due to pp_in_use > max_buffers. */
 		drbd_free_ee(mdev, e);
-		return 1;
+		e = NULL;
+		inc_rs_pending(mdev);
+		ok = drbd_send_drequest_csum(mdev, sector, size,
+					     digest, digest_size,
+					     P_CSUM_RS_REQUEST);
+		kfree(digest);
+	} else {
+		dev_err(DEV, "kmalloc() of digest failed.\n");
+		ok = 0;
 	}
 
-	if (likely((e->flags & EE_WAS_ERROR) == 0)) {
-		digest_size = crypto_hash_digestsize(mdev->csums_tfm);
-		digest = kmalloc(digest_size, GFP_NOIO);
-		if (digest) {
-			drbd_csum_ee(mdev, mdev->csums_tfm, e, digest);
-
-			inc_rs_pending(mdev);
-			ok = drbd_send_drequest_csum(mdev,
-						     e->sector,
-						     e->size,
-						     digest,
-						     digest_size,
-						     P_CSUM_RS_REQUEST);
-			kfree(digest);
-		} else {
-			dev_err(DEV, "kmalloc() of digest failed.\n");
-			ok = 0;
-		}
-	} else
-		ok = 1;
-
-	drbd_free_ee(mdev, e);
+out:
+	if (e)
+		drbd_free_ee(mdev, e);
 
 	if (unlikely(!ok))
 		dev_err(DEV, "drbd_send_drequest(..., csum) failed\n");
@@ -530,12 +555,7 @@ static int w_make_resync_request(struct drbd_conf *mdev,
 		return 1;
 	}
 
-	/* starting with drbd 8.3.8, we can handle multi-bio EEs,
-	 * if it should be necessary */
-	max_bio_size =
-		mdev->agreed_pro_version < 94 ? queue_max_hw_sectors(mdev->rq_queue) << 9 :
-		mdev->agreed_pro_version < 95 ?	DRBD_MAX_SIZE_H80_PACKET : DRBD_MAX_BIO_SIZE;
-
+	max_bio_size = queue_max_hw_sectors(mdev->rq_queue) << 9;
 	number = drbd_rs_number_requests(mdev);
 	if (number == 0)
 		goto requeue;
@@ -727,7 +747,7 @@ int w_start_resync(struct drbd_conf *mdev, struct drbd_work *w, int cancel)
 	}
 
 	drbd_start_resync(mdev, C_SYNC_SOURCE);
-	clear_bit(AHEAD_TO_SYNC_SOURCE, &mdev->current_epoch->flags);
+	clear_bit(AHEAD_TO_SYNC_SOURCE, &mdev->flags);
 	return 1;
 }
 
@@ -834,7 +854,7 @@ int drbd_resync_finished(struct drbd_conf *mdev)
 			const int ratio =
 				(t == 0)     ? 0 :
 			(t < 100000) ? ((s*100)/t) : (s/(t/100));
-			dev_info(DEV, "%u %% had equal check sums, eliminated: %luK; "
+			dev_info(DEV, "%u %% had equal checksums, eliminated: %luK; "
 			     "transferred %luK total %luK\n",
 			     ratio,
 			     Bit2KB(mdev->rs_same_csum),
@@ -1071,9 +1091,12 @@ int w_e_end_csum_rs_req(struct drbd_conf *mdev, struct drbd_work *w, int cancel)
 	return ok;
 }
 
+/* TODO merge common code with w_e_send_csum */
 int w_e_end_ov_req(struct drbd_conf *mdev, struct drbd_work *w, int cancel)
 {
 	struct drbd_epoch_entry *e = container_of(w, struct drbd_epoch_entry, w);
+	sector_t sector = e->sector;
+	unsigned int size = e->size;
 	int digest_size;
 	void *digest;
 	int ok = 1;
@@ -1093,17 +1116,25 @@ int w_e_end_ov_req(struct drbd_conf *mdev, struct drbd_work *w, int cancel)
 	else
 		memset(digest, 0, digest_size);
 
+	/* Free e and pages before send.
+	 * In case we block on congestion, we could otherwise run into
+	 * some distributed deadlock, if the other side blocks on
+	 * congestion as well, because our receiver blocks in
+	 * drbd_pp_alloc due to pp_in_use > max_buffers. */
+	drbd_free_ee(mdev, e);
+	e = NULL;
 	inc_rs_pending(mdev);
-	ok = drbd_send_drequest_csum(mdev, e->sector, e->size,
-				     digest, digest_size, P_OV_REPLY);
+	ok = drbd_send_drequest_csum(mdev, sector, size,
+				     digest, digest_size,
+				     P_OV_REPLY);
 	if (!ok)
 		dec_rs_pending(mdev);
 	kfree(digest);
 
 out:
-	drbd_free_ee(mdev, e);
+	if (e)
+		drbd_free_ee(mdev, e);
 	dec_unacked(mdev);
-
 	return ok;
 }
 
@@ -1122,8 +1153,10 @@ int w_e_end_ov_reply(struct drbd_conf *mdev, struct drbd_work *w, int cancel)
 {
 	struct drbd_epoch_entry *e = container_of(w, struct drbd_epoch_entry, w);
 	struct digest_info *di;
-	int digest_size;
 	void *digest;
+	sector_t sector = e->sector;
+	unsigned int size = e->size;
+	int digest_size;
 	int ok, eq = 0;
 
 	if (unlikely(cancel)) {
@@ -1153,16 +1186,21 @@ int w_e_end_ov_reply(struct drbd_conf *mdev, struct drbd_work *w, int cancel)
 		}
 	}
 
-	dec_unacked(mdev);
+		/* Free e and pages before send.
+		 * In case we block on congestion, we could otherwise run into
+		 * some distributed deadlock, if the other side blocks on
+		 * congestion as well, because our receiver blocks in
+		 * drbd_pp_alloc due to pp_in_use > max_buffers. */
+	drbd_free_ee(mdev, e);
 	if (!eq)
-		drbd_ov_oos_found(mdev, e->sector, e->size);
+		drbd_ov_oos_found(mdev, sector, size);
 	else
 		ov_oos_print(mdev);
 
-	ok = drbd_send_ack_ex(mdev, P_OV_RESULT, e->sector, e->size,
+	ok = drbd_send_ack_ex(mdev, P_OV_RESULT, sector, size,
 			      eq ? ID_IN_SYNC : ID_OUT_OF_SYNC);
 
-	drbd_free_ee(mdev, e);
+	dec_unacked(mdev);
 
 	--mdev->ov_left;
 
@@ -1500,14 +1538,14 @@ void drbd_start_resync(struct drbd_conf *mdev, enum drbd_conns side)
 	}
 
 	drbd_state_lock(mdev);
-
+	write_lock_irq(&global_state_lock);
 	if (!get_ldev_if_state(mdev, D_NEGOTIATING)) {
+		write_unlock_irq(&global_state_lock);
 		drbd_state_unlock(mdev);
 		return;
 	}
 
-	write_lock_irq(&global_state_lock);
-	ns = mdev->state;
+	ns.i = mdev->state.i;
 
 	ns.aftr_isp = !_drbd_may_sync_now(mdev);
 

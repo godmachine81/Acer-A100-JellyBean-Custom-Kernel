@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2005 - 2010 ServerEngines
+ * Copyright (C) 2005 - 2011 Emulex
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -7,24 +7,28 @@
  * as published by the Free Software Foundation.  The full GNU General
  * Public License is included in this distribution in the file called COPYING.
  *
- * Written by: Jayamohan Kallickal (jayamohank@serverengines.com)
+ * Written by: Jayamohan Kallickal (jayamohan.kallickal@emulex.com)
  *
  * Contact Information:
- * linux-drivers@serverengines.com
+ * linux-drivers@emulex.com
  *
- * ServerEngines
- * 209 N. Fair Oaks Ave
- * Sunnyvale, CA 94085
- *
+ * Emulex
+ * 3333 Susan Street
+ * Costa Mesa, CA 92626
  */
 
 #ifndef _BEISCSI_MGMT_
 #define _BEISCSI_MGMT_
 
-#include <linux/types.h>
-#include <linux/list.h>
+#include <scsi/scsi_bsg_iscsi.h>
 #include "be_iscsi.h"
 #include "be_main.h"
+
+#define IP_ACTION_ADD	0x01
+#define IP_ACTION_DEL	0x02
+
+#define IP_V6_LEN	16
+#define IP_V4_LEN	4
 
 /**
  * Pseudo amap definition in which each bit of the actual structure is defined
@@ -99,6 +103,10 @@ unsigned int mgmt_invalidate_icds(struct beiscsi_hba *phba,
 				struct invalidate_command_table *inv_tbl,
 				unsigned int num_invalidate, unsigned int cid,
 				struct be_dma_mem *nonemb_cmd);
+unsigned int mgmt_vendor_specific_fw_cmd(struct be_ctrl_info *ctrl,
+					 struct beiscsi_hba *phba,
+					 struct bsg_job *job,
+					 struct be_dma_mem *nonemb_cmd);
 
 struct iscsi_invalidate_connection_params_in {
 	struct be_cmd_req_hdr hdr;
@@ -205,6 +213,13 @@ struct be_mgmt_controller_attributes_resp {
 	struct mgmt_controller_attributes params;
 } __packed;
 
+struct be_bsg_vendor_cmd {
+	struct be_cmd_req_hdr hdr;
+	unsigned short region;
+	unsigned short offset;
+	unsigned short sector;
+} __packed;
+
 /* configuration management */
 
 #define GET_MGMT_CONTROLLER_WS(phba)    (phba->pmgmt_ws)
@@ -220,11 +235,14 @@ struct be_mgmt_controller_attributes_resp {
 				/* the CMD_RESPONSE_HEADER  */
 
 #define ISCSI_GET_PDU_TEMPLATE_ADDRESS(pc, pa) {\
-    pa->lo = phba->init_mem[ISCSI_MEM_GLOBAL_HEADER].mem_array[0].\
+	pa->lo = phba->init_mem[ISCSI_MEM_GLOBAL_HEADER].mem_array[0].\
 					bus_address.u.a32.address_lo;  \
-    pa->hi = phba->init_mem[ISCSI_MEM_GLOBAL_HEADER].mem_array[0].\
+	pa->hi = phba->init_mem[ISCSI_MEM_GLOBAL_HEADER].mem_array[0].\
 					bus_address.u.a32.address_hi;  \
 }
+
+#define BEISCSI_WRITE_FLASH 0
+#define BEISCSI_READ_FLASH 1
 
 struct beiscsi_endpoint {
 	struct beiscsi_hba *phba;
@@ -248,5 +266,28 @@ unsigned int mgmt_invalidate_connection(struct beiscsi_hba *phba,
 					 unsigned short cid,
 					 unsigned short issue_reset,
 					 unsigned short savecfg_flag);
+
+int mgmt_set_ip(struct beiscsi_hba *phba,
+		struct iscsi_iface_param_info *ip_param,
+		struct iscsi_iface_param_info *subnet_param,
+		uint32_t boot_proto);
+
+unsigned int mgmt_get_boot_target(struct beiscsi_hba *phba);
+
+unsigned int mgmt_get_session_info(struct beiscsi_hba *phba,
+				   u32 boot_session_handle,
+				   struct be_dma_mem *nonemb_cmd);
+
+int mgmt_get_nic_conf(struct beiscsi_hba *phba,
+		      struct be_cmd_get_nic_conf_resp *mac);
+
+int mgmt_get_if_info(struct beiscsi_hba *phba, int ip_type,
+		     struct be_cmd_get_if_info_resp *if_info);
+
+int mgmt_get_gateway(struct beiscsi_hba *phba, int ip_type,
+		     struct be_cmd_get_def_gateway_resp *gateway);
+
+int mgmt_set_gateway(struct beiscsi_hba *phba,
+		     struct iscsi_iface_param_info *gateway_param);
 
 #endif

@@ -112,7 +112,7 @@ static int ath_open(struct hci_uart *hu)
 
 	BT_DBG("hu %p", hu);
 
-	ath = kzalloc(sizeof(*ath), GFP_ATOMIC);
+	ath = kzalloc(sizeof(*ath), GFP_KERNEL);
 	if (!ath)
 		return -ENOMEM;
 
@@ -201,8 +201,13 @@ static struct sk_buff *ath_dequeue(struct hci_uart *hu)
 /* Recv data */
 static int ath_recv(struct hci_uart *hu, void *data, int count)
 {
-	if (hci_recv_stream_fragment(hu->hdev, data, count) < 0)
+	int ret;
+
+	ret = hci_recv_stream_fragment(hu->hdev, data, count);
+	if (ret < 0) {
 		BT_ERR("Frame Reassembly Failed");
+		return ret;
+	}
 
 	return count;
 }

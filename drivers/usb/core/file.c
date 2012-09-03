@@ -66,7 +66,7 @@ static struct usb_class {
 	struct class *class;
 } *usb_class;
 
-static char *usb_devnode(struct device *dev, mode_t *mode)
+static char *usb_devnode(struct device *dev, umode_t *mode)
 {
 	struct usb_class_driver *drv;
 
@@ -183,7 +183,7 @@ int usb_register_dev(struct usb_interface *intf,
 	if (retval)
 		return retval;
 
-	dev_dbg(&intf->dev, "looking for a minor, starting at %d", minor_base);
+	dev_dbg(&intf->dev, "looking for a minor, starting at %d\n", minor_base);
 
 	down_write(&minor_rwsem);
 	for (minor = minor_base; minor < MAX_USB_MINORS; ++minor) {
@@ -236,23 +236,15 @@ EXPORT_SYMBOL_GPL(usb_register_dev);
 void usb_deregister_dev(struct usb_interface *intf,
 			struct usb_class_driver *class_driver)
 {
-	int minor_base = class_driver->minor_base;
-	char name[20];
-
-#ifdef CONFIG_USB_DYNAMIC_MINORS
-	minor_base = 0;
-#endif
-
 	if (intf->minor == -1)
 		return;
 
-	dbg ("removing %d minor", intf->minor);
+	dev_dbg(&intf->dev, "removing %d minor\n", intf->minor);
 
 	down_write(&minor_rwsem);
 	usb_minors[intf->minor] = NULL;
 	up_write(&minor_rwsem);
 
-	snprintf(name, sizeof(name), class_driver->name, intf->minor - minor_base);
 	device_destroy(usb_class->class, MKDEV(USB_MAJOR, intf->minor));
 	intf->usb_dev = NULL;
 	intf->minor = -1;

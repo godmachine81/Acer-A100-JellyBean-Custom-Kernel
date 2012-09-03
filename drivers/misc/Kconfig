@@ -2,23 +2,13 @@
 # Misc strange devices
 #
 
-# This one has to live outside of the MISC_DEVICES conditional,
-# because it may be selected by drivers/platform/x86/hp_accel.
+menu "Misc devices"
+
 config SENSORS_LIS3LV02D
 	tristate
 	depends on INPUT
 	select INPUT_POLLDEV
 	default n
-
-menuconfig MISC_DEVICES
-	bool "Misc devices"
-	---help---
-	  Say Y here to get to see options for device drivers from various
-	  different categories. This option alone does not add any kernel code.
-
-	  If you say N, all options in this submenu will be skipped and disabled.
-
-if MISC_DEVICES
 
 config AD525X_DPOT
 	tristate "Analog Devices Digital Potentiometers"
@@ -61,13 +51,9 @@ config AD525X_DPOT_SPI
 	  To compile this driver as a module, choose M here: the
 	  module will be called ad525x_dpot-spi.
 
-config ANDROID_PMEM
-	bool "Android pmem allocator"
-	default y
-
 config ATMEL_PWM
 	tristate "Atmel AT32/AT91 PWM support"
-	depends on AVR32 || ARCH_AT91SAM9263 || ARCH_AT91SAM9RL || ARCH_AT91CAP9
+	depends on HAVE_CLK
 	help
 	  This option enables device driver support for the PWM channels
 	  on certain Atmel processors.  Pulse Width Modulation is used for
@@ -148,6 +134,20 @@ config PHANTOM
 	  If you choose to build module, its name will be phantom. If unsure,
 	  say N here.
 
+config INTEL_MID_PTI
+	tristate "Parallel Trace Interface for MIPI P1149.7 cJTAG standard"
+	depends on PCI
+	default n
+	help
+	  The PTI (Parallel Trace Interface) driver directs
+	  trace data routed from various parts in the system out
+	  through an Intel Penwell PTI port and out of the mobile
+	  device for analysis with a debugging tool (Lauterbach or Fido).
+
+	  You should select this driver if the target kernel is meant for
+	  an Intel Atom (non-netbook) mobile device containing a MIPI
+	  P1149.7 standard implementation.
+
 config SGI_IOC4
 	tristate "SGI IOC4 Base IO support"
 	depends on PCI
@@ -220,13 +220,6 @@ config ENCLOSURE_SERVICES
 	  driver (SCSI/ATA) which supports enclosures
 	  or a SCSI enclosure device (SES) to use these services.
 
-config KERNEL_DEBUGGER_CORE
-	bool "Kernel Debugger Core"
-	default n
-	---help---
-	  Generic kernel debugging command processor used by low level
-	  (interrupt context) platform-specific debuggers.
-
 config SGI_XP
 	tristate "Support communication between SGI SSIs"
 	depends on NET
@@ -243,8 +236,7 @@ config SGI_XP
 
 config CS5535_MFGPT
 	tristate "CS5535/CS5536 Geode Multi-Function General Purpose Timer (MFGPT) support"
-	depends on PCI
-	depends on X86
+	depends on PCI && X86 && MFD_CS5535
 	default n
 	help
 	  This driver provides access to MFGPT functionality for other
@@ -390,22 +382,6 @@ config HMC6352
 	  This driver provides support for the Honeywell HMC6352 compass,
 	  providing configuration and heading data via sysfs.
 
-config SENSORS_AK8975
-	tristate "AK8975 compass support"
-	default n
-	depends on I2C
-	help
-	  If you say yes here you get support for Asahi Kasei's
-	  orientation sensor AK8975.
-
-config SENSORS_NCT1008
-	tristate "ON Semiconductor Temperature Sensor"
-	default n
-	depends on I2C
-	help
-	 Say yes here if you wish to include the ON Semiconductor
-	 NCT1008 Temperature sensor.
-
 config EP93XX_PWM
 	tristate "EP93xx PWM support"
 	depends on ARCH_EP93XX
@@ -449,10 +425,6 @@ config TI_DAC7512
 	  This driver can also be built as a module. If so, the module
 	  will be called ti_dac7512.
 
-config UID_STAT
-	bool "UID based statistics tracking exported to /proc/uid_stat"
-	default n
-
 config VMWARE_BALLOON
 	tristate "VMware Balloon Driver"
 	depends on X86
@@ -480,17 +452,35 @@ config ARM_CHARLCD
 	  still useful.
 
 config BMP085
-	tristate "BMP085 digital pressure sensor"
+	bool
+	depends on SYSFS
+
+config BMP085_I2C
+	tristate "BMP085 digital pressure sensor on I2C"
+	select BMP085
+	select REGMAP_I2C
 	depends on I2C && SYSFS
 	help
-	  If you say yes here you get support for the Bosch Sensortec
-	  BMP085 digital pressure sensor.
+	  Say Y here if you want to support Bosch Sensortec's digital pressure
+	  sensor hooked to an I2C bus.
 
 	  To compile this driver as a module, choose M here: the
-	  module will be called bmp085.
+	  module will be called bmp085-i2c.
+
+config BMP085_SPI
+	tristate "BMP085 digital pressure sensor on SPI"
+	select BMP085
+	select REGMAP_SPI
+	depends on SPI_MASTER && SYSFS
+	help
+	  Say Y here if you want to support Bosch Sensortec's digital pressure
+	  sensor hooked to an SPI bus.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called bmp085-spi.
 
 config PCH_PHUB
-	tristate "PCH Packet Hub of Intel Topcliff / OKI SEMICONDUCTOR ML7213"
+	tristate "Intel EG20T PCH/LAPIS Semicon IOH(ML7213/ML7223/ML7831) PHUB"
 	depends on PCI
 	help
 	  This driver is for PCH(Platform controller Hub) PHUB(Packet Hub) of
@@ -498,69 +488,25 @@ config PCH_PHUB
 	  processor. The Topcliff has MAC address and Option ROM data in SROM.
 	  This driver can access MAC address and Option ROM data in SROM.
 
-	  This driver also can be used for OKI SEMICONDUCTOR's ML7213 which is
-	  for IVI(In-Vehicle Infotainment) use.
-	  ML7213 is companion chip for Intel Atom E6xx series.
-	  ML7213 is completely compatible for Intel EG20T PCH.
+	  This driver also can be used for LAPIS Semiconductor's IOH,
+	  ML7213/ML7223/ML7831.
+	  ML7213 which is for IVI(In-Vehicle Infotainment) use.
+	  ML7223 IOH is for MP(Media Phone) use.
+	  ML7831 IOH is for general purpose use.
+	  ML7213/ML7223/ML7831 is companion chip for Intel Atom E6xx series.
+	  ML7213/ML7223/ML7831 is completely compatible for Intel EG20T PCH.
 
 	  To compile this driver as a module, choose M here: the module will
 	  be called pch_phub.
 
-config WL127X_RFKILL
-	tristate "Bluetooth power control driver for TI wl127x"
-	depends on RFKILL
-	default n
-	---help---
-	 Creates an rfkill entry in sysfs for power control of Bluetooth
-	 TI wl127x chips.
-
-config APANIC
-	bool "Android kernel panic diagnostics driver"
-	default n
-	---help---
-	 Driver which handles kernel panics and attempts to write
-	 critical debugging data to flash.
-
-config APANIC_PLABEL
-	string "Android panic dump flash partition label"
-	depends on APANIC
-	default "kpanic"
-	---help---
-	 If your platform uses a different flash partition label for storing
- 	 crashdumps, enter it here.
-
-config BCM4329_RFKILL
-	bool "Enable BCM4329 RFKILL driver"
-	default n
-	---help---
-	Adds BCM4329 RFKILL driver for Broadcom BCM4329 chipset
-
-config TEGRA_CRYPTO_DEV
-	bool "Device node to access tegra aes hardware"
-	---help---
-	Dev node /dev/tegra-crypto in order to get access to tegra aes
-	hardware from user space
-
-config MAX1749_VIBRATOR
-	bool "MAX1749 vibrator device driver"
-	depends on ANDROID_TIMED_OUTPUT
-	default n
-	---help---
-	Adds a timed output vibrator device node for MAX1749 vibrator motor
-
-config STK2203_LIGHT_SENSOR
-	bool "STK2203 light sensor driver"
+config USB_SWITCH_FSA9480
+	tristate "FSA9480 USB Switch"
 	depends on I2C
-	default n
-	---help---
-	Adds STK2203 light sensor driver
-
-config AL3000A_LIGHT_SENSOR
-	bool "AL3000A light sensor driver"
-	depends on I2C
-	default n
-	---help---
-	Adds al3000a light sensor driver
+	help
+	  The FSA9480 is a USB port accessory detector and switch.
+	  The FSA9480 is fully controlled using I2C and enables USB data,
+	  stereo and mono audio, video, microphone and UART data to use
+	  a common connector port.
 
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
@@ -568,7 +514,7 @@ source "drivers/misc/cb710/Kconfig"
 source "drivers/misc/iwmc3200top/Kconfig"
 source "drivers/misc/ti-st/Kconfig"
 source "drivers/misc/lis3lv02d/Kconfig"
-source "drivers/misc/mpu3050/Kconfig"
-source "drivers/misc/tegra-baseband/Kconfig"
-
-endif # MISC_DEVICES
+source "drivers/misc/carma/Kconfig"
+source "drivers/misc/altera-stapl/Kconfig"
+source "drivers/misc/mei/Kconfig"
+endmenu

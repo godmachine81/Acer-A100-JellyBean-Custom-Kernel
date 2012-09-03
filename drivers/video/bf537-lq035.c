@@ -383,23 +383,19 @@ static int __devinit request_ports(void)
 	}
 
 #if (defined(UD) && defined(LBR))
-	if (gpio_request(UD, KBUILD_MODNAME)) {
+	if (gpio_request_one(UD, GPIOF_OUT_INIT_LOW, KBUILD_MODNAME)) {
 		pr_err("requesting GPIO %d failed\n", UD);
 		return -EBUSY;
 	}
 
-	if (gpio_request(LBR, KBUILD_MODNAME)) {
+	if (gpio_request_one(LBR, GPIOF_OUT_INIT_HIGH, KBUILD_MODNAME)) {
 		pr_err("requesting GPIO %d failed\n", LBR);
 		gpio_free(UD);
 		return -EBUSY;
 	}
-
-	gpio_direction_output(UD, 0);
-	gpio_direction_output(LBR, 1);
-
 #endif
 
-	if (gpio_request(MOD, KBUILD_MODNAME)) {
+	if (gpio_request_one(MOD, GPIOF_OUT_INIT_HIGH, KBUILD_MODNAME)) {
 		pr_err("requesting GPIO %d failed\n", MOD);
 #if (defined(UD) && defined(LBR))
 		gpio_free(LBR);
@@ -407,8 +403,6 @@ static int __devinit request_ports(void)
 #endif
 		return -EBUSY;
 	}
-
-	gpio_direction_output(MOD, 1);
 
 	SSYNC();
 	return 0;
@@ -789,6 +783,7 @@ static int __devinit bfin_lq035_probe(struct platform_device *pdev)
 	i2c_add_driver(&ad5280_driver);
 
 	memset(&props, 0, sizeof(props));
+	props.type = BACKLIGHT_RAW;
 	props.max_brightness = MAX_BRIGHENESS;
 	bl_dev = backlight_device_register("bf537-bl", NULL, NULL,
 					   &bfin_lq035fb_bl_ops, &props);

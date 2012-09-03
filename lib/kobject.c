@@ -14,7 +14,7 @@
 
 #include <linux/kobject.h>
 #include <linux/string.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/stat.h>
 #include <linux/slab.h>
 
@@ -47,13 +47,11 @@ static int populate_dir(struct kobject *kobj)
 static int create_dir(struct kobject *kobj)
 {
 	int error = 0;
-	if (kobject_name(kobj)) {
-		error = sysfs_create_dir(kobj);
-		if (!error) {
-			error = populate_dir(kobj);
-			if (error)
-				sysfs_remove_dir(kobj);
-		}
+	error = sysfs_create_dir(kobj);
+	if (!error) {
+		error = populate_dir(kobj);
+		if (error)
+			sysfs_remove_dir(kobj);
 	}
 	return error;
 }
@@ -192,14 +190,14 @@ static int kobject_add_internal(struct kobject *kobj)
 
 		/* be noisy on error issues */
 		if (error == -EEXIST)
-			printk(KERN_ERR "%s failed for %s with "
-			       "-EEXIST, don't try to register things with "
-			       "the same name in the same directory.\n",
-			       __func__, kobject_name(kobj));
+			WARN(1, "%s failed for %s with "
+			     "-EEXIST, don't try to register things with "
+			     "the same name in the same directory.\n",
+			     __func__, kobject_name(kobj));
 		else
-			printk(KERN_ERR "%s failed for %s (%d)\n",
-			       __func__, kobject_name(kobj), error);
-		dump_stack();
+			WARN(1, "%s failed for %s (error: %d parent: %s)\n",
+			     __func__, kobject_name(kobj), error,
+			     parent ? kobject_name(parent) : "'none'");
 	} else
 		kobj->state_in_sysfs = 1;
 
@@ -634,7 +632,7 @@ struct kobject *kobject_create(void)
 /**
  * kobject_create_and_add - create a struct kobject dynamically and register it with sysfs
  *
- * @name: the name for the kset
+ * @name: the name for the kobject
  * @parent: the parent kobject of this kobject, if any.
  *
  * This function creates a kobject structure dynamically and registers it
@@ -746,43 +744,11 @@ void kset_unregister(struct kset *k)
  */
 struct kobject *kset_find_obj(struct kset *kset, const char *name)
 {
-	return kset_find_obj_hinted(kset, name, NULL);
-}
-
-/**
- * kset_find_obj_hinted - search for object in kset given a predecessor hint.
- * @kset: kset we're looking in.
- * @name: object's name.
- * @hint: hint to possible object's predecessor.
- *
- * Check the hint's next object and if it is a match return it directly,
- * otherwise, fall back to the behavior of kset_find_obj().  Either way
- * a reference for the returned object is held and the reference on the
- * hinted object is released.
- */
-struct kobject *kset_find_obj_hinted(struct kset *kset, const char *name,
-				     struct kobject *hint)
-{
 	struct kobject *k;
 	struct kobject *ret = NULL;
 
 	spin_lock(&kset->list_lock);
 
-	if (!hint)
-		goto slow_search;
-
-	/* end of list detection */
-	if (hint->entry.next == kset->list.next)
-		goto slow_search;
-
-	k = container_of(hint->entry.next, struct kobject, entry);
-	if (!kobject_name(k) || strcmp(kobject_name(k), name))
-		goto slow_search;
-
-	ret = kobject_get(k);
-	goto unlock_exit;
-
-slow_search:
 	list_for_each_entry(k, &kset->list, entry) {
 		if (kobject_name(k) && !strcmp(kobject_name(k), name)) {
 			ret = kobject_get(k);
@@ -790,12 +756,7 @@ slow_search:
 		}
 	}
 
-unlock_exit:
 	spin_unlock(&kset->list_lock);
-
-	if (hint)
-		kobject_put(hint);
-
 	return ret;
 }
 
@@ -948,14 +909,14 @@ const struct kobj_ns_type_operations *kobj_ns_ops(struct kobject *kobj)
 }
 
 
-const void *kobj_ns_current(enum kobj_ns_type type)
+void *kobj_ns_grab_current(enum kobj_ns_type type)
 {
-	const void *ns = NULL;
+	void *ns = NULL;
 
 	spin_lock(&kobj_ns_type_lock);
 	if ((type > KOBJ_NS_TYPE_NONE) && (type < KOBJ_NS_TYPES) &&
 	    kobj_ns_ops_tbl[type])
-		ns = kobj_ns_ops_tbl[type]->current_ns();
+		ns = kobj_ns_ops_tbl[type]->grab_current_ns();
 	spin_unlock(&kobj_ns_type_lock);
 
 	return ns;
@@ -987,22 +948,14 @@ const void *kobj_ns_initial(enum kobj_ns_type type)
 	return ns;
 }
 
-/*
- * kobj_ns_exit - invalidate a namespace tag
- *
- * @type: the namespace type (i.e. KOBJ_NS_TYPE_NET)
- * @ns: the actual namespace being invalidated
- *
- * This is called when a tag is no longer valid.  For instance,
- * when a network namespace exits, it uses this helper to
- * make sure no sb's sysfs_info points to the now-invalidated
- * netns.
- */
-void kobj_ns_exit(enum kobj_ns_type type, const void *ns)
+void kobj_ns_drop(enum kobj_ns_type type, void *ns)
 {
-	sysfs_exit_ns(type, ns);
+	spin_lock(&kobj_ns_type_lock);
+	if ((type > KOBJ_NS_TYPE_NONE) && (type < KOBJ_NS_TYPES) &&
+	    kobj_ns_ops_tbl[type] && kobj_ns_ops_tbl[type]->drop_ns)
+		kobj_ns_ops_tbl[type]->drop_ns(ns);
+	spin_unlock(&kobj_ns_type_lock);
 }
-
 
 EXPORT_SYMBOL(kobject_get);
 EXPORT_SYMBOL(kobject_put);

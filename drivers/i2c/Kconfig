@@ -7,7 +7,7 @@ menuconfig I2C
 	depends on HAS_IOMEM
 	select RT_MUTEXES
 	---help---
-	  I2C (pronounce: I-square-C) is a slow serial bus protocol used in
+	  I2C (pronounce: I-squared-C) is a slow serial bus protocol used in
 	  many micro controller applications and developed by Philips.  SMBus,
 	  or System Management Bus is a subset of the I2C protocol.  More
 	  information is contained in the directory <file:Documentation/i2c/>,
@@ -49,7 +49,6 @@ config I2C_CHARDEV
 
 config I2C_MUX
 	tristate "I2C bus multiplexing support"
-	depends on EXPERIMENTAL
 	help
 	  Say Y here if you want the I2C core to support the ability to
 	  handle multiplexed I2C bus topologies, by presenting each
@@ -59,16 +58,6 @@ config I2C_MUX
 	  will be called i2c-mux.
 
 source drivers/i2c/muxes/Kconfig
-
-config I2C_SLAVE
-	bool "I2C slave driver support"
-	default n
-	help
-	  Say Y here if you want the I2C slave functionality in the driver.
-	  The external system will be master and the system on which this
-	  driver is running act as i2c slave.
-	  This drivers supports read/write data from master devices through
-	  I2C.
 
 config I2C_HELPER_AUTO
 	bool "Autoselect pertinent helper modules"

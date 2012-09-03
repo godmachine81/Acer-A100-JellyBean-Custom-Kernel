@@ -10,12 +10,15 @@
  */
 
 #include <linux/proc_fs.h>
+struct  ctl_table_header;
 
 extern struct proc_dir_entry proc_root;
 #ifdef CONFIG_PROC_SYSCTL
 extern int proc_sys_init(void);
+extern void sysctl_head_put(struct ctl_table_header *head);
 #else
 static inline void proc_sys_init(void) { }
+static inline void sysctl_head_put(struct ctl_table_header *head) { }
 #endif
 #ifdef CONFIG_NET
 extern int proc_net_init(void);
@@ -27,8 +30,6 @@ struct vmalloc_info {
 	unsigned long	used;
 	unsigned long	largest_chunk;
 };
-
-extern struct mm_struct *mm_for_maps(struct task_struct *);
 
 #ifdef CONFIG_MMU
 #define VMALLOC_TOTAL (VMALLOC_END - VMALLOC_START)
@@ -53,13 +54,25 @@ extern int proc_pid_statm(struct seq_file *m, struct pid_namespace *ns,
 				struct pid *pid, struct task_struct *task);
 extern loff_t mem_lseek(struct file *file, loff_t offset, int orig);
 
-extern const struct file_operations proc_maps_operations;
-extern const struct file_operations proc_numa_maps_operations;
-extern const struct file_operations proc_smaps_operations;
+extern const struct file_operations proc_tid_children_operations;
+extern const struct file_operations proc_pid_maps_operations;
+extern const struct file_operations proc_tid_maps_operations;
+extern const struct file_operations proc_pid_numa_maps_operations;
+extern const struct file_operations proc_tid_numa_maps_operations;
+extern const struct file_operations proc_pid_smaps_operations;
+extern const struct file_operations proc_tid_smaps_operations;
 extern const struct file_operations proc_clear_refs_operations;
 extern const struct file_operations proc_pagemap_operations;
 extern const struct file_operations proc_net_operations;
 extern const struct inode_operations proc_net_inode_operations;
+
+struct proc_maps_private {
+	struct pid *pid;
+	struct task_struct *task;
+#ifdef CONFIG_MMU
+	struct vm_area_struct *tail_vma;
+#endif
+};
 
 void proc_init_inodecache(void);
 
@@ -109,6 +122,7 @@ void pde_put(struct proc_dir_entry *pde);
 
 int proc_fill_super(struct super_block *);
 struct inode *proc_get_inode(struct super_block *, struct proc_dir_entry *);
+int proc_remount(struct super_block *sb, int *flags, char *data);
 
 /*
  * These are generic /proc routines that use the internal
@@ -119,3 +133,21 @@ struct inode *proc_get_inode(struct super_block *, struct proc_dir_entry *);
  */
 int proc_readdir(struct file *, void *, filldir_t);
 struct dentry *proc_lookup(struct inode *, struct dentry *, struct nameidata *);
+
+
+
+/* Lookups */
+typedef struct dentry *instantiate_t(struct inode *, struct dentry *,
+				struct task_struct *, const void *);
+int proc_fill_cache(struct file *filp, void *dirent, filldir_t filldir,
+	const char *name, int len,
+	instantiate_t instantiate, struct task_struct *task, const void *ptr);
+int pid_revalidate(struct dentry *dentry, struct nameidata *nd);
+struct inode *proc_pid_make_inode(struct super_block * sb, struct task_struct *task);
+extern const struct dentry_operations pid_dentry_operations;
+int pid_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat);
+int proc_setattr(struct dentry *dentry, struct iattr *attr);
+
+extern const struct inode_operations proc_ns_dir_inode_operations;
+extern const struct file_operations proc_ns_dir_operations;
+

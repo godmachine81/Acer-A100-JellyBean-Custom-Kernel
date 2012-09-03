@@ -313,7 +313,7 @@ mtd_pci_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		goto release;
 
 	mtd->owner = THIS_MODULE;
-	add_mtd_device(mtd);
+	mtd_device_register(mtd, NULL, 0);
 
 	pci_set_drvdata(dev, mtd);
 
@@ -336,7 +336,7 @@ mtd_pci_remove(struct pci_dev *dev)
 	struct mtd_info *mtd = pci_get_drvdata(dev);
 	struct map_pci_info *map = mtd->priv;
 
-	del_mtd_device(mtd);
+	mtd_device_unregister(mtd);
 	map_destroy(mtd);
 	map->exit(dev, map);
 	kfree(map);
@@ -352,18 +352,7 @@ static struct pci_driver mtd_pci_driver = {
 	.id_table =	mtd_pci_ids,
 };
 
-static int __init mtd_pci_maps_init(void)
-{
-	return pci_register_driver(&mtd_pci_driver);
-}
-
-static void __exit mtd_pci_maps_exit(void)
-{
-	pci_unregister_driver(&mtd_pci_driver);
-}
-
-module_init(mtd_pci_maps_init);
-module_exit(mtd_pci_maps_exit);
+module_pci_driver(mtd_pci_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Russell King <rmk@arm.linux.org.uk>");

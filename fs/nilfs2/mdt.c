@@ -58,15 +58,15 @@ nilfs_mdt_insert_new_block(struct inode *inode, unsigned long block,
 
 	set_buffer_mapped(bh);
 
-	kaddr = kmap_atomic(bh->b_page, KM_USER0);
+	kaddr = kmap_atomic(bh->b_page);
 	memset(kaddr + bh_offset(bh), 0, 1 << inode->i_blkbits);
 	if (init_block)
 		init_block(inode, bh, kaddr);
 	flush_dcache_page(bh->b_page);
-	kunmap_atomic(kaddr, KM_USER0);
+	kunmap_atomic(kaddr);
 
 	set_buffer_uptodate(bh);
-	nilfs_mark_buffer_dirty(bh);
+	mark_buffer_dirty(bh);
 	nilfs_mdt_mark_dirty(inode);
 	return 0;
 }
@@ -355,7 +355,7 @@ int nilfs_mdt_mark_block_dirty(struct inode *inode, unsigned long block)
 	err = nilfs_mdt_read_block(inode, block, 0, &bh);
 	if (unlikely(err))
 		return err;
-	nilfs_mark_buffer_dirty(bh);
+	mark_buffer_dirty(bh);
 	nilfs_mdt_mark_dirty(inode);
 	brelse(bh);
 	return 0;
@@ -450,9 +450,9 @@ int nilfs_mdt_setup_shadow_map(struct inode *inode,
 
 	INIT_LIST_HEAD(&shadow->frozen_buffers);
 	address_space_init_once(&shadow->frozen_data);
-	nilfs_mapping_init(&shadow->frozen_data, bdi);
+	nilfs_mapping_init(&shadow->frozen_data, inode, bdi);
 	address_space_init_once(&shadow->frozen_btnodes);
-	nilfs_mapping_init(&shadow->frozen_btnodes, bdi);
+	nilfs_mapping_init(&shadow->frozen_btnodes, inode, bdi);
 	mi->mi_shadow = shadow;
 	return 0;
 }

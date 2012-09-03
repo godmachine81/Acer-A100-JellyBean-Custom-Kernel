@@ -24,7 +24,7 @@
 #include <asm/debug.h>
 #include <asm/ebcdic.h>
 #include <asm/io.h>
-#include <asm/s390_ext.h>
+#include <asm/irq.h>
 #include <asm/vtoc.h>
 #include <asm/diag.h>
 
@@ -229,7 +229,7 @@ dasd_diag_term_IO(struct dasd_ccw_req * cqr)
 }
 
 /* Handle external interruption. */
-static void dasd_ext_handler(unsigned int ext_int_code,
+static void dasd_ext_handler(struct ext_code ext_code,
 			     unsigned int param32, unsigned long param64)
 {
 	struct dasd_ccw_req *cqr, *next;
@@ -239,7 +239,7 @@ static void dasd_ext_handler(unsigned int ext_int_code,
 	addr_t ip;
 	int rc;
 
-	switch (ext_int_code >> 24) {
+	switch (ext_code.subcode >> 8) {
 	case DASD_DIAG_CODE_31BIT:
 		ip = (addr_t) param32;
 		break;
@@ -280,7 +280,7 @@ static void dasd_ext_handler(unsigned int ext_int_code,
 	cqr->stopclk = get_clock();
 
 	expires = 0;
-	if ((ext_int_code & 0xff0000) == 0) {
+	if ((ext_code.subcode & 0xff) == 0) {
 		cqr->status = DASD_CQR_SUCCESS;
 		/* Start first request on queue if possible -> fast_io. */
 		if (!list_empty(&device->ccw_queue)) {
@@ -296,7 +296,7 @@ static void dasd_ext_handler(unsigned int ext_int_code,
 		cqr->status = DASD_CQR_QUEUED;
 		DBF_DEV_EVENT(DBF_DEBUG, device, "interrupt status for "
 			      "request %p was %d (%d retries left)", cqr,
-			      (ext_int_code >> 16) & 0xff, cqr->retries);
+			      ext_code.subcode & 0xff, cqr->retries);
 		dasd_diag_erp(device);
 	}
 
@@ -642,7 +642,7 @@ dasd_diag_init(void)
 	}
 	ASCEBC(dasd_diag_discipline.ebcname, 4);
 
-	ctl_set_bit(0, 9);
+	service_subclass_irq_register();
 	register_external_interrupt(0x2603, dasd_ext_handler);
 	dasd_diag_discipline_pointer = &dasd_diag_discipline;
 	return 0;
@@ -652,7 +652,7 @@ static void __exit
 dasd_diag_cleanup(void)
 {
 	unregister_external_interrupt(0x2603, dasd_ext_handler);
-	ctl_clear_bit(0, 9);
+	service_subclass_irq_unregister();
 	dasd_diag_discipline_pointer = NULL;
 }
 

@@ -9,6 +9,7 @@
 #include <linux/stop_machine.h>
 #include <linux/freezer.h>
 #include <linux/syscore_ops.h>
+#include <linux/export.h>
 
 #include <xen/xen.h>
 #include <xen/xenbus.h>
@@ -70,12 +71,7 @@ static int xen_suspend(void *data)
 
 	BUG_ON(!irqs_disabled());
 
-	err = sysdev_suspend(PMSG_FREEZE);
-	if (!err) {
-		err = syscore_suspend();
-		if (err)
-			sysdev_resume();
-	}
+	err = syscore_suspend();
 	if (err) {
 		printk(KERN_ERR "xen_suspend: system core suspend failed: %d\n",
 			err);
@@ -102,7 +98,6 @@ static int xen_suspend(void *data)
 	}
 
 	syscore_resume();
-	sysdev_resume();
 
 	return 0;
 }
@@ -134,9 +129,10 @@ static void do_suspend(void)
 	printk(KERN_DEBUG "suspending xenstore...\n");
 	xs_suspend();
 
-	err = dpm_suspend_noirq(PMSG_FREEZE);
+	err = dpm_suspend_end(PMSG_FREEZE);
 	if (err) {
-		printk(KERN_ERR "dpm_suspend_noirq failed: %d\n", err);
+		printk(KERN_ERR "dpm_suspend_end failed: %d\n", err);
+		si.cancelled = 0;
 		goto out_resume;
 	}
 
@@ -154,7 +150,7 @@ static void do_suspend(void)
 
 	err = stop_machine(xen_suspend, &si, cpumask_of(0));
 
-	dpm_resume_noirq(si.cancelled ? PMSG_THAW : PMSG_RESTORE);
+	dpm_resume_start(si.cancelled ? PMSG_THAW : PMSG_RESTORE);
 
 	if (err) {
 		printk(KERN_ERR "failed to start xen_suspend: %d\n", err);

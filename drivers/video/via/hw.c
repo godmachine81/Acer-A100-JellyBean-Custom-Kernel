@@ -20,274 +20,84 @@
  */
 
 #include <linux/via-core.h>
+#include <asm/olpc.h>
 #include "global.h"
+#include "via_clock.h"
 
-static struct pll_config cle266_pll_config[] = {
-	{19, 4, 0},
-	{26, 5, 0},
-	{28, 5, 0},
-	{31, 5, 0},
-	{33, 5, 0},
-	{55, 5, 0},
-	{102, 5, 0},
-	{53, 6, 0},
-	{92, 6, 0},
-	{98, 6, 0},
-	{112, 6, 0},
-	{41, 7, 0},
-	{60, 7, 0},
-	{99, 7, 0},
-	{100, 7, 0},
-	{83, 8, 0},
-	{86, 8, 0},
-	{108, 8, 0},
-	{87, 9, 0},
-	{118, 9, 0},
-	{95, 12, 0},
-	{115, 12, 0},
-	{108, 13, 0},
-	{83, 17, 0},
-	{67, 20, 0},
-	{86, 20, 0},
-	{98, 20, 0},
-	{121, 24, 0},
-	{99, 29, 0},
-	{33, 3, 1},
-	{15, 4, 1},
-	{23, 4, 1},
-	{37, 5, 1},
-	{83, 5, 1},
-	{85, 5, 1},
-	{94, 5, 1},
-	{103, 5, 1},
-	{109, 5, 1},
-	{113, 5, 1},
-	{121, 5, 1},
-	{82, 6, 1},
-	{31, 7, 1},
-	{55, 7, 1},
-	{84, 7, 1},
-	{83, 8, 1},
-	{76, 9, 1},
-	{127, 9, 1},
-	{33, 4, 2},
-	{75, 4, 2},
-	{119, 4, 2},
-	{121, 4, 2},
-	{91, 5, 2},
-	{118, 5, 2},
-	{83, 6, 2},
-	{109, 6, 2},
-	{90, 7, 2},
-	{93, 2, 3},
-	{53, 3, 3},
-	{73, 4, 3},
-	{89, 4, 3},
-	{105, 4, 3},
-	{117, 4, 3},
-	{101, 5, 3},
-	{121, 5, 3},
-	{127, 5, 3},
-	{99, 7, 3}
+static struct pll_limit cle266_pll_limits[] = {
+	{19, 19, 4, 0},
+	{26, 102, 5, 0},
+	{53, 112, 6, 0},
+	{41, 100, 7, 0},
+	{83, 108, 8, 0},
+	{87, 118, 9, 0},
+	{95, 115, 12, 0},
+	{108, 108, 13, 0},
+	{83, 83, 17, 0},
+	{67, 98, 20, 0},
+	{121, 121, 24, 0},
+	{99, 99, 29, 0},
+	{33, 33, 3, 1},
+	{15, 23, 4, 1},
+	{37, 121, 5, 1},
+	{82, 82, 6, 1},
+	{31, 84, 7, 1},
+	{83, 83, 8, 1},
+	{76, 127, 9, 1},
+	{33, 121, 4, 2},
+	{91, 118, 5, 2},
+	{83, 109, 6, 2},
+	{90, 90, 7, 2},
+	{93, 93, 2, 3},
+	{53, 53, 3, 3},
+	{73, 117, 4, 3},
+	{101, 127, 5, 3},
+	{99, 99, 7, 3}
 };
 
-static struct pll_config k800_pll_config[] = {
-	{22, 2, 0},
-	{28, 3, 0},
-	{81, 3, 1},
-	{85, 3, 1},
-	{98, 3, 1},
-	{112, 3, 1},
-	{86, 4, 1},
-	{166, 4, 1},
-	{109, 5, 1},
-	{113, 5, 1},
-	{121, 5, 1},
-	{131, 5, 1},
-	{143, 5, 1},
-	{153, 5, 1},
-	{66, 3, 2},
-	{68, 3, 2},
-	{95, 3, 2},
-	{106, 3, 2},
-	{116, 3, 2},
-	{93, 4, 2},
-	{119, 4, 2},
-	{121, 4, 2},
-	{133, 4, 2},
-	{137, 4, 2},
-	{117, 5, 2},
-	{118, 5, 2},
-	{120, 5, 2},
-	{124, 5, 2},
-	{132, 5, 2},
-	{137, 5, 2},
-	{141, 5, 2},
-	{166, 5, 2},
-	{170, 5, 2},
-	{191, 5, 2},
-	{206, 5, 2},
-	{208, 5, 2},
-	{30, 2, 3},
-	{69, 3, 3},
-	{82, 3, 3},
-	{83, 3, 3},
-	{109, 3, 3},
-	{114, 3, 3},
-	{125, 3, 3},
-	{89, 4, 3},
-	{103, 4, 3},
-	{117, 4, 3},
-	{126, 4, 3},
-	{150, 4, 3},
-	{161, 4, 3},
-	{121, 5, 3},
-	{127, 5, 3},
-	{131, 5, 3},
-	{134, 5, 3},
-	{148, 5, 3},
-	{169, 5, 3},
-	{172, 5, 3},
-	{182, 5, 3},
-	{195, 5, 3},
-	{196, 5, 3},
-	{208, 5, 3},
-	{66, 2, 4},
-	{85, 3, 4},
-	{141, 4, 4},
-	{146, 4, 4},
-	{161, 4, 4},
-	{177, 5, 4}
+static struct pll_limit k800_pll_limits[] = {
+	{22, 22, 2, 0},
+	{28, 28, 3, 0},
+	{81, 112, 3, 1},
+	{86, 166, 4, 1},
+	{109, 153, 5, 1},
+	{66, 116, 3, 2},
+	{93, 137, 4, 2},
+	{117, 208, 5, 2},
+	{30, 30, 2, 3},
+	{69, 125, 3, 3},
+	{89, 161, 4, 3},
+	{121, 208, 5, 3},
+	{66, 66, 2, 4},
+	{85, 85, 3, 4},
+	{141, 161, 4, 4},
+	{177, 177, 5, 4}
 };
 
-static struct pll_config cx700_pll_config[] = {
-	{98, 3, 1},
-	{86, 4, 1},
-	{109, 5, 1},
-	{110, 5, 1},
-	{113, 5, 1},
-	{121, 5, 1},
-	{131, 5, 1},
-	{135, 5, 1},
-	{142, 5, 1},
-	{143, 5, 1},
-	{153, 5, 1},
-	{187, 5, 1},
-	{208, 5, 1},
-	{68, 2, 2},
-	{95, 3, 2},
-	{116, 3, 2},
-	{93, 4, 2},
-	{119, 4, 2},
-	{133, 4, 2},
-	{137, 4, 2},
-	{151, 4, 2},
-	{166, 4, 2},
-	{110, 5, 2},
-	{112, 5, 2},
-	{117, 5, 2},
-	{118, 5, 2},
-	{120, 5, 2},
-	{132, 5, 2},
-	{137, 5, 2},
-	{141, 5, 2},
-	{151, 5, 2},
-	{166, 5, 2},
-	{175, 5, 2},
-	{191, 5, 2},
-	{206, 5, 2},
-	{174, 7, 2},
-	{82, 3, 3},
-	{109, 3, 3},
-	{117, 4, 3},
-	{150, 4, 3},
-	{161, 4, 3},
-	{112, 5, 3},
-	{115, 5, 3},
-	{121, 5, 3},
-	{127, 5, 3},
-	{129, 5, 3},
-	{131, 5, 3},
-	{134, 5, 3},
-	{138, 5, 3},
-	{148, 5, 3},
-	{157, 5, 3},
-	{169, 5, 3},
-	{172, 5, 3},
-	{190, 5, 3},
-	{195, 5, 3},
-	{196, 5, 3},
-	{208, 5, 3},
-	{141, 5, 4},
-	{150, 5, 4},
-	{166, 5, 4},
-	{176, 5, 4},
-	{177, 5, 4},
-	{183, 5, 4},
-	{202, 5, 4}
+static struct pll_limit cx700_pll_limits[] = {
+	{98, 98, 3, 1},
+	{86, 86, 4, 1},
+	{109, 208, 5, 1},
+	{68, 68, 2, 2},
+	{95, 116, 3, 2},
+	{93, 166, 4, 2},
+	{110, 206, 5, 2},
+	{174, 174, 7, 2},
+	{82, 109, 3, 3},
+	{117, 161, 4, 3},
+	{112, 208, 5, 3},
+	{141, 202, 5, 4}
 };
 
-static struct pll_config vx855_pll_config[] = {
-	{86, 4, 1},
-	{108, 5, 1},
-	{110, 5, 1},
-	{113, 5, 1},
-	{121, 5, 1},
-	{131, 5, 1},
-	{135, 5, 1},
-	{142, 5, 1},
-	{143, 5, 1},
-	{153, 5, 1},
-	{164, 5, 1},
-	{187, 5, 1},
-	{208, 5, 1},
-	{110, 5, 2},
-	{112, 5, 2},
-	{117, 5, 2},
-	{118, 5, 2},
-	{124, 5, 2},
-	{132, 5, 2},
-	{137, 5, 2},
-	{141, 5, 2},
-	{149, 5, 2},
-	{151, 5, 2},
-	{159, 5, 2},
-	{166, 5, 2},
-	{167, 5, 2},
-	{172, 5, 2},
-	{189, 5, 2},
-	{191, 5, 2},
-	{194, 5, 2},
-	{206, 5, 2},
-	{208, 5, 2},
-	{83, 3, 3},
-	{88, 3, 3},
-	{109, 3, 3},
-	{112, 3, 3},
-	{103, 4, 3},
-	{105, 4, 3},
-	{161, 4, 3},
-	{112, 5, 3},
-	{115, 5, 3},
-	{121, 5, 3},
-	{127, 5, 3},
-	{134, 5, 3},
-	{137, 5, 3},
-	{148, 5, 3},
-	{157, 5, 3},
-	{169, 5, 3},
-	{172, 5, 3},
-	{182, 5, 3},
-	{191, 5, 3},
-	{195, 5, 3},
-	{209, 5, 3},
-	{142, 4, 4},
-	{146, 4, 4},
-	{161, 4, 4},
-	{141, 5, 4},
-	{150, 5, 4},
-	{165, 5, 4},
-	{176, 5, 4}
+static struct pll_limit vx855_pll_limits[] = {
+	{86, 86, 4, 1},
+	{108, 208, 5, 1},
+	{110, 208, 5, 2},
+	{83, 112, 3, 3},
+	{103, 161, 4, 3},
+	{112, 209, 5, 3},
+	{142, 161, 4, 4},
+	{141, 176, 5, 4}
 };
 
 /* according to VIA Technologies these values are based on experiment */
@@ -306,6 +116,42 @@ static struct io_reg scaling_parameters[] = {
 	{VIACR, CR85, 0xFF, 0x1D},	/* LCD Scaling Parameter 12 */
 	{VIACR, CR86, 0xFF, 0x1E},	/* LCD Scaling Parameter 13 */
 	{VIACR, CR87, 0xFF, 0x1F},	/* LCD Scaling Parameter 14 */
+};
+
+static struct io_reg common_vga[] = {
+	{VIACR, CR07, 0x10, 0x10}, /* [0] vertical total (bit 8)
+					[1] vertical display end (bit 8)
+					[2] vertical retrace start (bit 8)
+					[3] start vertical blanking (bit 8)
+					[4] line compare (bit 8)
+					[5] vertical total (bit 9)
+					[6] vertical display end (bit 9)
+					[7] vertical retrace start (bit 9) */
+	{VIACR, CR08, 0xFF, 0x00}, /* [0-4] preset row scan
+					[5-6] byte panning */
+	{VIACR, CR09, 0xDF, 0x40}, /* [0-4] max scan line
+					[5] start vertical blanking (bit 9)
+					[6] line compare (bit 9)
+					[7] scan doubling */
+	{VIACR, CR0A, 0xFF, 0x1E}, /* [0-4] cursor start
+					[5] cursor disable */
+	{VIACR, CR0B, 0xFF, 0x00}, /* [0-4] cursor end
+					[5-6] cursor skew */
+	{VIACR, CR0E, 0xFF, 0x00}, /* [0-7] cursor location (high) */
+	{VIACR, CR0F, 0xFF, 0x00}, /* [0-7] cursor location (low) */
+	{VIACR, CR11, 0xF0, 0x80}, /* [0-3] vertical retrace end
+					[6] memory refresh bandwidth
+					[7] CRTC register protect enable */
+	{VIACR, CR14, 0xFF, 0x00}, /* [0-4] underline location
+					[5] divide memory address clock by 4
+					[6] double word addressing */
+	{VIACR, CR17, 0xFF, 0x63}, /* [0-1] mapping of display address 13-14
+					[2] divide scan line clock by 2
+					[3] divide memory address clock by 2
+					[5] address wrap
+					[6] byte mode select
+					[7] sync enable */
+	{VIACR, CR18, 0xFF, 0xFF}, /* [0-7] line compare */
 };
 
 static struct fifo_depth_select display_fifo_depth_reg = {
@@ -343,67 +189,6 @@ static struct fetch_count fetch_count_reg = {
 	{IGA1_FETCH_COUNT_REG_NUM, {{SR1C, 0, 7}, {SR1D, 0, 1} } },
 	/* IGA2 Fetch Count Register */
 	{IGA2_FETCH_COUNT_REG_NUM, {{CR65, 0, 7}, {CR67, 2, 3} } }
-};
-
-static struct iga1_crtc_timing iga1_crtc_reg = {
-	/* IGA1 Horizontal Total */
-	{IGA1_HOR_TOTAL_REG_NUM, {{CR00, 0, 7}, {CR36, 3, 3} } },
-	/* IGA1 Horizontal Addressable Video */
-	{IGA1_HOR_ADDR_REG_NUM, {{CR01, 0, 7} } },
-	/* IGA1 Horizontal Blank Start */
-	{IGA1_HOR_BLANK_START_REG_NUM, {{CR02, 0, 7} } },
-	/* IGA1 Horizontal Blank End */
-	{IGA1_HOR_BLANK_END_REG_NUM,
-	 {{CR03, 0, 4}, {CR05, 7, 7}, {CR33, 5, 5} } },
-	/* IGA1 Horizontal Sync Start */
-	{IGA1_HOR_SYNC_START_REG_NUM, {{CR04, 0, 7}, {CR33, 4, 4} } },
-	/* IGA1 Horizontal Sync End */
-	{IGA1_HOR_SYNC_END_REG_NUM, {{CR05, 0, 4} } },
-	/* IGA1 Vertical Total */
-	{IGA1_VER_TOTAL_REG_NUM,
-	 {{CR06, 0, 7}, {CR07, 0, 0}, {CR07, 5, 5}, {CR35, 0, 0} } },
-	/* IGA1 Vertical Addressable Video */
-	{IGA1_VER_ADDR_REG_NUM,
-	 {{CR12, 0, 7}, {CR07, 1, 1}, {CR07, 6, 6}, {CR35, 2, 2} } },
-	/* IGA1 Vertical Blank Start */
-	{IGA1_VER_BLANK_START_REG_NUM,
-	 {{CR15, 0, 7}, {CR07, 3, 3}, {CR09, 5, 5}, {CR35, 3, 3} } },
-	/* IGA1 Vertical Blank End */
-	{IGA1_VER_BLANK_END_REG_NUM, {{CR16, 0, 7} } },
-	/* IGA1 Vertical Sync Start */
-	{IGA1_VER_SYNC_START_REG_NUM,
-	 {{CR10, 0, 7}, {CR07, 2, 2}, {CR07, 7, 7}, {CR35, 1, 1} } },
-	/* IGA1 Vertical Sync End */
-	{IGA1_VER_SYNC_END_REG_NUM, {{CR11, 0, 3} } }
-};
-
-static struct iga2_crtc_timing iga2_crtc_reg = {
-	/* IGA2 Horizontal Total */
-	{IGA2_HOR_TOTAL_REG_NUM, {{CR50, 0, 7}, {CR55, 0, 3} } },
-	/* IGA2 Horizontal Addressable Video */
-	{IGA2_HOR_ADDR_REG_NUM, {{CR51, 0, 7}, {CR55, 4, 6} } },
-	/* IGA2 Horizontal Blank Start */
-	{IGA2_HOR_BLANK_START_REG_NUM, {{CR52, 0, 7}, {CR54, 0, 2} } },
-	/* IGA2 Horizontal Blank End */
-	{IGA2_HOR_BLANK_END_REG_NUM,
-	 {{CR53, 0, 7}, {CR54, 3, 5}, {CR5D, 6, 6} } },
-	/* IGA2 Horizontal Sync Start */
-	{IGA2_HOR_SYNC_START_REG_NUM,
-	 {{CR56, 0, 7}, {CR54, 6, 7}, {CR5C, 7, 7}, {CR5D, 7, 7} } },
-	/* IGA2 Horizontal Sync End */
-	{IGA2_HOR_SYNC_END_REG_NUM, {{CR57, 0, 7}, {CR5C, 6, 6} } },
-	/* IGA2 Vertical Total */
-	{IGA2_VER_TOTAL_REG_NUM, {{CR58, 0, 7}, {CR5D, 0, 2} } },
-	/* IGA2 Vertical Addressable Video */
-	{IGA2_VER_ADDR_REG_NUM, {{CR59, 0, 7}, {CR5D, 3, 5} } },
-	/* IGA2 Vertical Blank Start */
-	{IGA2_VER_BLANK_START_REG_NUM, {{CR5A, 0, 7}, {CR5C, 0, 2} } },
-	/* IGA2 Vertical Blank End */
-	{IGA2_VER_BLANK_END_REG_NUM, {{CR5B, 0, 7}, {CR5C, 3, 5} } },
-	/* IGA2 Vertical Sync Start */
-	{IGA2_VER_SYNC_START_REG_NUM, {{CR5E, 0, 7}, {CR5F, 5, 7} } },
-	/* IGA2 Vertical Sync End */
-	{IGA2_VER_SYNC_END_REG_NUM, {{CR5F, 0, 4} } }
 };
 
 static struct rgbLUT palLUT_table[] = {
@@ -676,6 +461,9 @@ static struct via_device_mapping device_mapping[] = {
 	{VIA_LVDS2, "LVDS2"}
 };
 
+/* structure with function pointers to support clock control */
+static struct via_clock clock;
+
 static void load_fix_bit_crtc_reg(void);
 static void __devinit init_gfx_chip_info(int chip_type);
 static void __devinit init_tmds_chip_info(void);
@@ -770,13 +558,14 @@ static u32 get_lcd_devices(int output_interface)
 /*Set IGA path for each device*/
 void viafb_set_iga_path(void)
 {
+	int crt_iga_path = 0;
 
 	if (viafb_SAMM_ON == 1) {
 		if (viafb_CRT_ON) {
 			if (viafb_primary_dev == CRT_Device)
-				viaparinfo->crt_setting_info->iga_path = IGA1;
+				crt_iga_path = IGA1;
 			else
-				viaparinfo->crt_setting_info->iga_path = IGA2;
+				crt_iga_path = IGA2;
 		}
 
 		if (viafb_DVI_ON) {
@@ -793,8 +582,7 @@ void viafb_set_iga_path(void)
 					UNICHROME_CLE266)) {
 					viaparinfo->
 					lvds_setting_info->iga_path = IGA2;
-					viaparinfo->
-					crt_setting_info->iga_path = IGA1;
+					crt_iga_path = IGA1;
 					viaparinfo->
 					tmds_setting_info->iga_path = IGA1;
 				} else
@@ -814,10 +602,10 @@ void viafb_set_iga_path(void)
 		viafb_SAMM_ON = 0;
 
 		if (viafb_CRT_ON && viafb_LCD_ON) {
-			viaparinfo->crt_setting_info->iga_path = IGA1;
+			crt_iga_path = IGA1;
 			viaparinfo->lvds_setting_info->iga_path = IGA2;
 		} else if (viafb_CRT_ON && viafb_DVI_ON) {
-			viaparinfo->crt_setting_info->iga_path = IGA1;
+			crt_iga_path = IGA1;
 			viaparinfo->tmds_setting_info->iga_path = IGA2;
 		} else if (viafb_LCD_ON && viafb_DVI_ON) {
 			viaparinfo->tmds_setting_info->iga_path = IGA1;
@@ -826,7 +614,7 @@ void viafb_set_iga_path(void)
 			viaparinfo->lvds_setting_info->iga_path = IGA2;
 			viaparinfo->lvds_setting_info2->iga_path = IGA2;
 		} else if (viafb_CRT_ON) {
-			viaparinfo->crt_setting_info->iga_path = IGA1;
+			crt_iga_path = IGA1;
 		} else if (viafb_LCD_ON) {
 			viaparinfo->lvds_setting_info->iga_path = IGA2;
 		} else if (viafb_DVI_ON) {
@@ -837,7 +625,7 @@ void viafb_set_iga_path(void)
 	viaparinfo->shared->iga1_devices = 0;
 	viaparinfo->shared->iga2_devices = 0;
 	if (viafb_CRT_ON) {
-		if (viaparinfo->crt_setting_info->iga_path == IGA1)
+		if (crt_iga_path == IGA1)
 			viaparinfo->shared->iga1_devices |= VIA_CRT;
 		else
 			viaparinfo->shared->iga2_devices |= VIA_CRT;
@@ -875,6 +663,10 @@ void viafb_set_iga_path(void)
 				viaparinfo->chip_info->
 				lvds_chip_info2.output_interface);
 	}
+
+	/* looks like the OLPC has its display wired to DVP1 and LVDS2 */
+	if (machine_is_olpc())
+		viaparinfo->shared->iga2_devices = VIA_DVP1 | VIA_LVDS2;
 }
 
 static void set_color_register(u8 index, u8 red, u8 green, u8 blue)
@@ -1162,25 +954,17 @@ void via_odev_to_seq(struct seq_file *m, u32 odev)
 
 static void load_fix_bit_crtc_reg(void)
 {
+	viafb_unlock_crt();
+
 	/* always set to 1 */
 	viafb_write_reg_mask(CR03, VIACR, 0x80, BIT7);
-	/* line compare should set all bits = 1 (extend modes) */
-	viafb_write_reg(CR18, VIACR, 0xff);
-	/* line compare should set all bits = 1 (extend modes) */
-	viafb_write_reg_mask(CR07, VIACR, 0x10, BIT4);
-	/* line compare should set all bits = 1 (extend modes) */
-	viafb_write_reg_mask(CR09, VIACR, 0x40, BIT6);
 	/* line compare should set all bits = 1 (extend modes) */
 	viafb_write_reg_mask(CR35, VIACR, 0x10, BIT4);
 	/* line compare should set all bits = 1 (extend modes) */
 	viafb_write_reg_mask(CR33, VIACR, 0x06, BIT0 + BIT1 + BIT2);
 	/*viafb_write_reg_mask(CR32, VIACR, 0x01, BIT0); */
-	/* extend mode always set to e3h */
-	viafb_write_reg(CR17, VIACR, 0xe3);
-	/* extend mode always set to 0h */
-	viafb_write_reg(CR08, VIACR, 0x00);
-	/* extend mode always set to 0h */
-	viafb_write_reg(CR14, VIACR, 0x00);
+
+	viafb_lock_crt();
 
 	/* If K8M800, enable Prefetch Mode. */
 	if ((viaparinfo->chip_info->gfx_chip_name == UNICHROME_K800)
@@ -1601,69 +1385,54 @@ void viafb_load_FIFO_reg(int set_iga, int hor_active, int ver_active)
 
 }
 
-static u32 cle266_encode_pll(struct pll_config pll)
-{
-	return (pll.multiplier << 8)
-		| (pll.rshift << 6)
-		| pll.divisor;
-}
-
-static u32 k800_encode_pll(struct pll_config pll)
-{
-	return ((pll.divisor - 2) << 16)
-		| (pll.rshift << 10)
-		| (pll.multiplier - 2);
-}
-
-static u32 vx855_encode_pll(struct pll_config pll)
-{
-	return (pll.divisor << 16)
-		| (pll.rshift << 10)
-		| pll.multiplier;
-}
-
-static inline u32 get_pll_internal_frequency(u32 ref_freq,
-	struct pll_config pll)
-{
-	return ref_freq / pll.divisor * pll.multiplier;
-}
-
-static inline u32 get_pll_output_frequency(u32 ref_freq, struct pll_config pll)
-{
-	return get_pll_internal_frequency(ref_freq, pll)>>pll.rshift;
-}
-
-static struct pll_config get_pll_config(struct pll_config *config, int size,
+static struct via_pll_config get_pll_config(struct pll_limit *limits, int size,
 	int clk)
 {
-	struct pll_config best = config[0];
+	struct via_pll_config cur, up, down, best = {0, 1, 0};
 	const u32 f0 = 14318180; /* X1 frequency */
-	int i;
+	int i, f;
 
-	for (i = 1; i < size; i++) {
-		if (abs(get_pll_output_frequency(f0, config[i]) - clk)
-			< abs(get_pll_output_frequency(f0, best) - clk))
-			best = config[i];
+	for (i = 0; i < size; i++) {
+		cur.rshift = limits[i].rshift;
+		cur.divisor = limits[i].divisor;
+		cur.multiplier = clk / ((f0 / cur.divisor)>>cur.rshift);
+		f = abs(get_pll_output_frequency(f0, cur) - clk);
+		up = down = cur;
+		up.multiplier++;
+		down.multiplier--;
+		if (abs(get_pll_output_frequency(f0, up) - clk) < f)
+			cur = up;
+		else if (abs(get_pll_output_frequency(f0, down) - clk) < f)
+			cur = down;
+
+		if (cur.multiplier < limits[i].multiplier_min)
+			cur.multiplier = limits[i].multiplier_min;
+		else if (cur.multiplier > limits[i].multiplier_max)
+			cur.multiplier = limits[i].multiplier_max;
+
+		f = abs(get_pll_output_frequency(f0, cur) - clk);
+		if (f < abs(get_pll_output_frequency(f0, best) - clk))
+			best = cur;
 	}
 
 	return best;
 }
 
-u32 viafb_get_clk_value(int clk)
+static struct via_pll_config get_best_pll_config(int clk)
 {
-	u32 value = 0;
+	struct via_pll_config config;
 
 	switch (viaparinfo->chip_info->gfx_chip_name) {
 	case UNICHROME_CLE266:
 	case UNICHROME_K400:
-		value = cle266_encode_pll(get_pll_config(cle266_pll_config,
-			ARRAY_SIZE(cle266_pll_config), clk));
+		config = get_pll_config(cle266_pll_limits,
+			ARRAY_SIZE(cle266_pll_limits), clk);
 		break;
 	case UNICHROME_K800:
 	case UNICHROME_PM800:
 	case UNICHROME_CN700:
-		value = k800_encode_pll(get_pll_config(k800_pll_config,
-			ARRAY_SIZE(k800_pll_config), clk));
+		config = get_pll_config(k800_pll_limits,
+			ARRAY_SIZE(k800_pll_limits), clk);
 		break;
 	case UNICHROME_CX700:
 	case UNICHROME_CN750:
@@ -1671,407 +1440,79 @@ u32 viafb_get_clk_value(int clk)
 	case UNICHROME_P4M890:
 	case UNICHROME_P4M900:
 	case UNICHROME_VX800:
-		value = k800_encode_pll(get_pll_config(cx700_pll_config,
-			ARRAY_SIZE(cx700_pll_config), clk));
+		config = get_pll_config(cx700_pll_limits,
+			ARRAY_SIZE(cx700_pll_limits), clk);
 		break;
 	case UNICHROME_VX855:
 	case UNICHROME_VX900:
-		value = vx855_encode_pll(get_pll_config(vx855_pll_config,
-			ARRAY_SIZE(vx855_pll_config), clk));
+		config = get_pll_config(vx855_pll_limits,
+			ARRAY_SIZE(vx855_pll_limits), clk);
 		break;
 	}
 
-	return value;
+	return config;
 }
 
 /* Set VCLK*/
 void viafb_set_vclock(u32 clk, int set_iga)
 {
-	/* H.W. Reset : ON */
-	viafb_write_reg_mask(CR17, VIACR, 0x00, BIT7);
+	struct via_pll_config config = get_best_pll_config(clk);
 
-	if (set_iga == IGA1) {
-		/* Change D,N FOR VCLK */
-		switch (viaparinfo->chip_info->gfx_chip_name) {
-		case UNICHROME_CLE266:
-		case UNICHROME_K400:
-			via_write_reg(VIASR, SR46, (clk & 0x00FF));
-			via_write_reg(VIASR, SR47, (clk & 0xFF00) >> 8);
-			break;
-
-		case UNICHROME_K800:
-		case UNICHROME_PM800:
-		case UNICHROME_CN700:
-		case UNICHROME_CX700:
-		case UNICHROME_CN750:
-		case UNICHROME_K8M890:
-		case UNICHROME_P4M890:
-		case UNICHROME_P4M900:
-		case UNICHROME_VX800:
-		case UNICHROME_VX855:
-		case UNICHROME_VX900:
-			via_write_reg(VIASR, SR44, (clk & 0x0000FF));
-			via_write_reg(VIASR, SR45, (clk & 0x00FF00) >> 8);
-			via_write_reg(VIASR, SR46, (clk & 0xFF0000) >> 16);
-			break;
-		}
-	}
-
-	if (set_iga == IGA2) {
-		/* Change D,N FOR LCK */
-		switch (viaparinfo->chip_info->gfx_chip_name) {
-		case UNICHROME_CLE266:
-		case UNICHROME_K400:
-			via_write_reg(VIASR, SR44, (clk & 0x00FF));
-			via_write_reg(VIASR, SR45, (clk & 0xFF00) >> 8);
-			break;
-
-		case UNICHROME_K800:
-		case UNICHROME_PM800:
-		case UNICHROME_CN700:
-		case UNICHROME_CX700:
-		case UNICHROME_CN750:
-		case UNICHROME_K8M890:
-		case UNICHROME_P4M890:
-		case UNICHROME_P4M900:
-		case UNICHROME_VX800:
-		case UNICHROME_VX855:
-		case UNICHROME_VX900:
-			via_write_reg(VIASR, SR4A, (clk & 0x0000FF));
-			via_write_reg(VIASR, SR4B, (clk & 0x00FF00) >> 8);
-			via_write_reg(VIASR, SR4C, (clk & 0xFF0000) >> 16);
-			break;
-		}
-	}
-
-	/* H.W. Reset : OFF */
-	viafb_write_reg_mask(CR17, VIACR, 0x80, BIT7);
-
-	/* Reset PLL */
-	if (set_iga == IGA1) {
-		viafb_write_reg_mask(SR40, VIASR, 0x02, BIT1);
-		viafb_write_reg_mask(SR40, VIASR, 0x00, BIT1);
-	}
-
-	if (set_iga == IGA2) {
-		viafb_write_reg_mask(SR40, VIASR, 0x04, BIT2);
-		viafb_write_reg_mask(SR40, VIASR, 0x00, BIT2);
-	}
+	if (set_iga == IGA1)
+		clock.set_primary_pll(config);
+	if (set_iga == IGA2)
+		clock.set_secondary_pll(config);
 
 	/* Fire! */
 	via_write_misc_reg_mask(0x0C, 0x0C); /* select external clock */
 }
 
-void viafb_load_crtc_timing(struct display_timing device_timing,
-	int set_iga)
+struct display_timing var_to_timing(const struct fb_var_screeninfo *var,
+	u16 cxres, u16 cyres)
 {
-	int i;
-	int viafb_load_reg_num = 0;
-	int reg_value = 0;
-	struct io_register *reg = NULL;
+	struct display_timing timing;
+	u16 dx = (var->xres - cxres) / 2, dy = (var->yres - cyres) / 2;
 
-	viafb_unlock_crt();
-
-	for (i = 0; i < 12; i++) {
-		if (set_iga == IGA1) {
-			switch (i) {
-			case H_TOTAL_INDEX:
-				reg_value =
-				    IGA1_HOR_TOTAL_FORMULA(device_timing.
-							   hor_total);
-				viafb_load_reg_num =
-					iga1_crtc_reg.hor_total.reg_num;
-				reg = iga1_crtc_reg.hor_total.reg;
-				break;
-			case H_ADDR_INDEX:
-				reg_value =
-				    IGA1_HOR_ADDR_FORMULA(device_timing.
-							  hor_addr);
-				viafb_load_reg_num =
-					iga1_crtc_reg.hor_addr.reg_num;
-				reg = iga1_crtc_reg.hor_addr.reg;
-				break;
-			case H_BLANK_START_INDEX:
-				reg_value =
-				    IGA1_HOR_BLANK_START_FORMULA
-				    (device_timing.hor_blank_start);
-				viafb_load_reg_num =
-				    iga1_crtc_reg.hor_blank_start.reg_num;
-				reg = iga1_crtc_reg.hor_blank_start.reg;
-				break;
-			case H_BLANK_END_INDEX:
-				reg_value =
-				    IGA1_HOR_BLANK_END_FORMULA
-				    (device_timing.hor_blank_start,
-				     device_timing.hor_blank_end);
-				viafb_load_reg_num =
-				    iga1_crtc_reg.hor_blank_end.reg_num;
-				reg = iga1_crtc_reg.hor_blank_end.reg;
-				break;
-			case H_SYNC_START_INDEX:
-				reg_value =
-				    IGA1_HOR_SYNC_START_FORMULA
-				    (device_timing.hor_sync_start);
-				viafb_load_reg_num =
-				    iga1_crtc_reg.hor_sync_start.reg_num;
-				reg = iga1_crtc_reg.hor_sync_start.reg;
-				break;
-			case H_SYNC_END_INDEX:
-				reg_value =
-				    IGA1_HOR_SYNC_END_FORMULA
-				    (device_timing.hor_sync_start,
-				     device_timing.hor_sync_end);
-				viafb_load_reg_num =
-				    iga1_crtc_reg.hor_sync_end.reg_num;
-				reg = iga1_crtc_reg.hor_sync_end.reg;
-				break;
-			case V_TOTAL_INDEX:
-				reg_value =
-				    IGA1_VER_TOTAL_FORMULA(device_timing.
-							   ver_total);
-				viafb_load_reg_num =
-					iga1_crtc_reg.ver_total.reg_num;
-				reg = iga1_crtc_reg.ver_total.reg;
-				break;
-			case V_ADDR_INDEX:
-				reg_value =
-				    IGA1_VER_ADDR_FORMULA(device_timing.
-							  ver_addr);
-				viafb_load_reg_num =
-					iga1_crtc_reg.ver_addr.reg_num;
-				reg = iga1_crtc_reg.ver_addr.reg;
-				break;
-			case V_BLANK_START_INDEX:
-				reg_value =
-				    IGA1_VER_BLANK_START_FORMULA
-				    (device_timing.ver_blank_start);
-				viafb_load_reg_num =
-				    iga1_crtc_reg.ver_blank_start.reg_num;
-				reg = iga1_crtc_reg.ver_blank_start.reg;
-				break;
-			case V_BLANK_END_INDEX:
-				reg_value =
-				    IGA1_VER_BLANK_END_FORMULA
-				    (device_timing.ver_blank_start,
-				     device_timing.ver_blank_end);
-				viafb_load_reg_num =
-				    iga1_crtc_reg.ver_blank_end.reg_num;
-				reg = iga1_crtc_reg.ver_blank_end.reg;
-				break;
-			case V_SYNC_START_INDEX:
-				reg_value =
-				    IGA1_VER_SYNC_START_FORMULA
-				    (device_timing.ver_sync_start);
-				viafb_load_reg_num =
-				    iga1_crtc_reg.ver_sync_start.reg_num;
-				reg = iga1_crtc_reg.ver_sync_start.reg;
-				break;
-			case V_SYNC_END_INDEX:
-				reg_value =
-				    IGA1_VER_SYNC_END_FORMULA
-				    (device_timing.ver_sync_start,
-				     device_timing.ver_sync_end);
-				viafb_load_reg_num =
-				    iga1_crtc_reg.ver_sync_end.reg_num;
-				reg = iga1_crtc_reg.ver_sync_end.reg;
-				break;
-
-			}
-		}
-
-		if (set_iga == IGA2) {
-			switch (i) {
-			case H_TOTAL_INDEX:
-				reg_value =
-				    IGA2_HOR_TOTAL_FORMULA(device_timing.
-							   hor_total);
-				viafb_load_reg_num =
-					iga2_crtc_reg.hor_total.reg_num;
-				reg = iga2_crtc_reg.hor_total.reg;
-				break;
-			case H_ADDR_INDEX:
-				reg_value =
-				    IGA2_HOR_ADDR_FORMULA(device_timing.
-							  hor_addr);
-				viafb_load_reg_num =
-					iga2_crtc_reg.hor_addr.reg_num;
-				reg = iga2_crtc_reg.hor_addr.reg;
-				break;
-			case H_BLANK_START_INDEX:
-				reg_value =
-				    IGA2_HOR_BLANK_START_FORMULA
-				    (device_timing.hor_blank_start);
-				viafb_load_reg_num =
-				    iga2_crtc_reg.hor_blank_start.reg_num;
-				reg = iga2_crtc_reg.hor_blank_start.reg;
-				break;
-			case H_BLANK_END_INDEX:
-				reg_value =
-				    IGA2_HOR_BLANK_END_FORMULA
-				    (device_timing.hor_blank_start,
-				     device_timing.hor_blank_end);
-				viafb_load_reg_num =
-				    iga2_crtc_reg.hor_blank_end.reg_num;
-				reg = iga2_crtc_reg.hor_blank_end.reg;
-				break;
-			case H_SYNC_START_INDEX:
-				reg_value =
-				    IGA2_HOR_SYNC_START_FORMULA
-				    (device_timing.hor_sync_start);
-				if (UNICHROME_CN700 <=
-					viaparinfo->chip_info->gfx_chip_name)
-					viafb_load_reg_num =
-					    iga2_crtc_reg.hor_sync_start.
-					    reg_num;
-				else
-					viafb_load_reg_num = 3;
-				reg = iga2_crtc_reg.hor_sync_start.reg;
-				break;
-			case H_SYNC_END_INDEX:
-				reg_value =
-				    IGA2_HOR_SYNC_END_FORMULA
-				    (device_timing.hor_sync_start,
-				     device_timing.hor_sync_end);
-				viafb_load_reg_num =
-				    iga2_crtc_reg.hor_sync_end.reg_num;
-				reg = iga2_crtc_reg.hor_sync_end.reg;
-				break;
-			case V_TOTAL_INDEX:
-				reg_value =
-				    IGA2_VER_TOTAL_FORMULA(device_timing.
-							   ver_total);
-				viafb_load_reg_num =
-					iga2_crtc_reg.ver_total.reg_num;
-				reg = iga2_crtc_reg.ver_total.reg;
-				break;
-			case V_ADDR_INDEX:
-				reg_value =
-				    IGA2_VER_ADDR_FORMULA(device_timing.
-							  ver_addr);
-				viafb_load_reg_num =
-					iga2_crtc_reg.ver_addr.reg_num;
-				reg = iga2_crtc_reg.ver_addr.reg;
-				break;
-			case V_BLANK_START_INDEX:
-				reg_value =
-				    IGA2_VER_BLANK_START_FORMULA
-				    (device_timing.ver_blank_start);
-				viafb_load_reg_num =
-				    iga2_crtc_reg.ver_blank_start.reg_num;
-				reg = iga2_crtc_reg.ver_blank_start.reg;
-				break;
-			case V_BLANK_END_INDEX:
-				reg_value =
-				    IGA2_VER_BLANK_END_FORMULA
-				    (device_timing.ver_blank_start,
-				     device_timing.ver_blank_end);
-				viafb_load_reg_num =
-				    iga2_crtc_reg.ver_blank_end.reg_num;
-				reg = iga2_crtc_reg.ver_blank_end.reg;
-				break;
-			case V_SYNC_START_INDEX:
-				reg_value =
-				    IGA2_VER_SYNC_START_FORMULA
-				    (device_timing.ver_sync_start);
-				viafb_load_reg_num =
-				    iga2_crtc_reg.ver_sync_start.reg_num;
-				reg = iga2_crtc_reg.ver_sync_start.reg;
-				break;
-			case V_SYNC_END_INDEX:
-				reg_value =
-				    IGA2_VER_SYNC_END_FORMULA
-				    (device_timing.ver_sync_start,
-				     device_timing.ver_sync_end);
-				viafb_load_reg_num =
-				    iga2_crtc_reg.ver_sync_end.reg_num;
-				reg = iga2_crtc_reg.ver_sync_end.reg;
-				break;
-
-			}
-		}
-		viafb_load_reg(reg_value, viafb_load_reg_num, reg, VIACR);
-	}
-
-	viafb_lock_crt();
+	timing.hor_addr = cxres;
+	timing.hor_sync_start = timing.hor_addr + var->right_margin + dx;
+	timing.hor_sync_end = timing.hor_sync_start + var->hsync_len;
+	timing.hor_total = timing.hor_sync_end + var->left_margin + dx;
+	timing.hor_blank_start = timing.hor_addr + dx;
+	timing.hor_blank_end = timing.hor_total - dx;
+	timing.ver_addr = cyres;
+	timing.ver_sync_start = timing.ver_addr + var->lower_margin + dy;
+	timing.ver_sync_end = timing.ver_sync_start + var->vsync_len;
+	timing.ver_total = timing.ver_sync_end + var->upper_margin + dy;
+	timing.ver_blank_start = timing.ver_addr + dy;
+	timing.ver_blank_end = timing.ver_total - dy;
+	return timing;
 }
 
-void viafb_fill_crtc_timing(struct crt_mode_table *crt_table,
-	struct VideoModeTable *video_mode, int bpp_byte, int set_iga)
+void viafb_fill_crtc_timing(const struct fb_var_screeninfo *var,
+	u16 cxres, u16 cyres, int iga)
 {
-	struct display_timing crt_reg;
-	int i;
-	int index = 0;
-	int h_addr, v_addr;
-	u32 pll_D_N, clock, refresh = viafb_refresh;
+	struct display_timing crt_reg = var_to_timing(var,
+		cxres ? cxres : var->xres, cyres ? cyres : var->yres);
 
-	if (viafb_SAMM_ON && set_iga == IGA2)
-		refresh = viafb_refresh1;
+	if (iga == IGA1)
+		via_set_primary_timing(&crt_reg);
+	else if (iga == IGA2)
+		via_set_secondary_timing(&crt_reg);
 
-	for (i = 0; i < video_mode->mode_array; i++) {
-		index = i;
+	viafb_load_fetch_count_reg(var->xres, var->bits_per_pixel / 8, iga);
+	if (viaparinfo->chip_info->gfx_chip_name != UNICHROME_CLE266
+		&& viaparinfo->chip_info->gfx_chip_name != UNICHROME_K400)
+		viafb_load_FIFO_reg(iga, var->xres, var->yres);
 
-		if (crt_table[i].refresh_rate == refresh)
-			break;
-	}
-
-	crt_reg = crt_table[index].crtc;
-
-	/* Mode 640x480 has border, but LCD/DFP didn't have border. */
-	/* So we would delete border. */
-	if ((viafb_LCD_ON | viafb_DVI_ON)
-	    && video_mode->crtc[0].crtc.hor_addr == 640
-	    && video_mode->crtc[0].crtc.ver_addr == 480
-	    && refresh == 60) {
-		/* The border is 8 pixels. */
-		crt_reg.hor_blank_start = crt_reg.hor_blank_start - 8;
-
-		/* Blanking time should add left and right borders. */
-		crt_reg.hor_blank_end = crt_reg.hor_blank_end + 16;
-	}
-
-	h_addr = crt_reg.hor_addr;
-	v_addr = crt_reg.ver_addr;
-	if (set_iga == IGA1) {
-		viafb_unlock_crt();
-		viafb_write_reg(CR09, VIACR, 0x00);	/*initial CR09=0 */
-		viafb_write_reg_mask(CR11, VIACR, 0x00, BIT4 + BIT5 + BIT6);
-		viafb_write_reg_mask(CR17, VIACR, 0x00, BIT7);
-	}
-
-	switch (set_iga) {
-	case IGA1:
-		viafb_load_crtc_timing(crt_reg, IGA1);
-		break;
-	case IGA2:
-		viafb_load_crtc_timing(crt_reg, IGA2);
-		break;
-	}
-
-	load_fix_bit_crtc_reg();
-	viafb_lock_crt();
-	viafb_write_reg_mask(CR17, VIACR, 0x80, BIT7);
-	viafb_load_fetch_count_reg(h_addr, bpp_byte, set_iga);
-
-	/* load FIFO */
-	if ((viaparinfo->chip_info->gfx_chip_name != UNICHROME_CLE266)
-	    && (viaparinfo->chip_info->gfx_chip_name != UNICHROME_K400))
-		viafb_load_FIFO_reg(set_iga, h_addr, v_addr);
-
-	clock = crt_reg.hor_total * crt_reg.ver_total
-		* crt_table[index].refresh_rate;
-	pll_D_N = viafb_get_clk_value(clock);
-	DEBUG_MSG(KERN_INFO "PLL=%x", pll_D_N);
-	viafb_set_vclock(pll_D_N, set_iga);
-
+	viafb_set_vclock(PICOS2KHZ(var->pixclock) * 1000, iga);
 }
 
 void __devinit viafb_init_chip_info(int chip_type)
 {
+	via_clock_init(&clock, chip_type);
 	init_gfx_chip_info(chip_type);
 	init_tmds_chip_info();
 	init_lvds_chip_info();
-
-	viaparinfo->crt_setting_info->iga_path = IGA1;
 
 	/*Set IGA path for each device */
 	viafb_set_iga_path();
@@ -2089,13 +1530,6 @@ void viafb_update_device_setting(int hres, int vres, int bpp, int flag)
 	if (flag == 0) {
 		viaparinfo->tmds_setting_info->h_active = hres;
 		viaparinfo->tmds_setting_info->v_active = vres;
-
-		viaparinfo->lvds_setting_info->h_active = hres;
-		viaparinfo->lvds_setting_info->v_active = vres;
-		viaparinfo->lvds_setting_info->bpp = bpp;
-		viaparinfo->lvds_setting_info2->h_active = hres;
-		viaparinfo->lvds_setting_info2->v_active = vres;
-		viaparinfo->lvds_setting_info2->bpp = bpp;
 	} else {
 
 		if (viaparinfo->tmds_setting_info->iga_path == IGA2) {
@@ -2103,16 +1537,6 @@ void viafb_update_device_setting(int hres, int vres, int bpp, int flag)
 			viaparinfo->tmds_setting_info->v_active = vres;
 		}
 
-		if (viaparinfo->lvds_setting_info->iga_path == IGA2) {
-			viaparinfo->lvds_setting_info->h_active = hres;
-			viaparinfo->lvds_setting_info->v_active = vres;
-			viaparinfo->lvds_setting_info->bpp = bpp;
-		}
-		if (IGA2 == viaparinfo->lvds_setting_info2->iga_path) {
-			viaparinfo->lvds_setting_info2->h_active = hres;
-			viaparinfo->lvds_setting_info2->v_active = vres;
-			viaparinfo->lvds_setting_info2->bpp = bpp;
-		}
 	}
 }
 
@@ -2321,39 +1745,26 @@ static void set_display_channel(void)
 	}
 }
 
-static u8 get_sync(struct fb_info *info)
+static u8 get_sync(struct fb_var_screeninfo *var)
 {
 	u8 polarity = 0;
 
-	if (!(info->var.sync & FB_SYNC_HOR_HIGH_ACT))
+	if (!(var->sync & FB_SYNC_HOR_HIGH_ACT))
 		polarity |= VIA_HSYNC_NEGATIVE;
-	if (!(info->var.sync & FB_SYNC_VERT_HIGH_ACT))
+	if (!(var->sync & FB_SYNC_VERT_HIGH_ACT))
 		polarity |= VIA_VSYNC_NEGATIVE;
 	return polarity;
 }
 
-int viafb_setmode(struct VideoModeTable *vmode_tbl, int video_bpp,
-	struct VideoModeTable *vmode_tbl1, int video_bpp1)
+static void hw_init(void)
 {
-	int i, j;
-	int port;
-	u32 devices = viaparinfo->shared->iga1_devices
-		| viaparinfo->shared->iga2_devices;
-	u8 value, index, mask;
-	struct crt_mode_table *crt_timing;
-	struct crt_mode_table *crt_timing1 = NULL;
-
-	device_screen_off();
-	crt_timing = vmode_tbl->crtc;
-
-	if (viafb_SAMM_ON == 1) {
-		crt_timing1 = vmode_tbl1->crtc;
-	}
+	int i;
 
 	inb(VIAStatus);
 	outb(0x00, VIAAR);
 
 	/* Write Common Setting for Video Mode */
+	viafb_write_regx(common_vga, ARRAY_SIZE(common_vga));
 	switch (viaparinfo->chip_info->gfx_chip_name) {
 	case UNICHROME_CLE266:
 		viafb_write_regx(CLE266_ModeXregs, NUM_TOTAL_CLE266_ModeXregs);
@@ -2386,9 +1797,12 @@ int viafb_setmode(struct VideoModeTable *vmode_tbl, int video_bpp,
 		break;
 	}
 
+	/* magic required on VX900 for correct modesetting on IGA1 */
+	via_write_reg_mask(VIACR, 0x45, 0x00, 0x01);
+
+	/* probably this should go to the scaling code one day */
+	via_write_reg_mask(VIACR, 0xFD, 0, 0x80); /* VX900 hw scale on IGA2 */
 	viafb_write_regx(scaling_parameters, ARRAY_SIZE(scaling_parameters));
-	device_off();
-	via_set_state(devices, VIA_STATE_OFF);
 
 	/* Fill VPIT Parameters */
 	/* Write Misc Register */
@@ -2399,9 +1813,6 @@ int viafb_setmode(struct VideoModeTable *vmode_tbl, int video_bpp,
 		via_write_reg(VIASR, i, VPIT.SR[i - 1]);
 
 	viafb_write_reg_mask(0x15, VIASR, 0xA2, 0xA2);
-
-	/* Write CRTC */
-	viafb_fill_crtc_timing(crt_timing, vmode_tbl, video_bpp / 8, IGA1);
 
 	/* Write Graphic Controller */
 	for (i = 0; i < StdGR; i++)
@@ -2417,12 +1828,29 @@ int viafb_setmode(struct VideoModeTable *vmode_tbl, int video_bpp,
 	inb(VIAStatus);
 	outb(0x20, VIAAR);
 
+	load_fix_bit_crtc_reg();
+}
+
+int viafb_setmode(void)
+{
+	int j, cxres = 0, cyres = 0;
+	int port;
+	u32 devices = viaparinfo->shared->iga1_devices
+		| viaparinfo->shared->iga2_devices;
+	u8 value, index, mask;
+	struct fb_var_screeninfo var2;
+
+	device_screen_off();
+	device_off();
+	via_set_state(devices, VIA_STATE_OFF);
+
+	hw_init();
+
 	/* Update Patch Register */
 
 	if ((viaparinfo->chip_info->gfx_chip_name == UNICHROME_CLE266
-	    || viaparinfo->chip_info->gfx_chip_name == UNICHROME_K400)
-	    && vmode_tbl->crtc[0].crtc.hor_addr == 1024
-	    && vmode_tbl->crtc[0].crtc.ver_addr == 768) {
+		|| viaparinfo->chip_info->gfx_chip_name == UNICHROME_K400)
+		&& viafbinfo->var.xres == 1024 && viafbinfo->var.yres == 768) {
 		for (j = 0; j < res_patch_table[0].table_length; j++) {
 			index = res_patch_table[0].io_reg_table[j].index;
 			port = res_patch_table[0].io_reg_table[j].port;
@@ -2449,23 +1877,30 @@ int viafb_setmode(struct VideoModeTable *vmode_tbl, int video_bpp,
 
 	/* Clear On Screen */
 
+	if (viafb_dual_fb) {
+		var2 = viafbinfo1->var;
+	} else if (viafb_SAMM_ON) {
+		viafb_fill_var_timing_info(&var2, viafb_get_best_mode(
+			viafb_second_xres, viafb_second_yres, viafb_refresh1));
+		cxres = viafbinfo->var.xres;
+		cyres = viafbinfo->var.yres;
+		var2.bits_per_pixel = viafbinfo->var.bits_per_pixel;
+	}
+
 	/* CRT set mode */
 	if (viafb_CRT_ON) {
-		if (viafb_SAMM_ON && (viaparinfo->crt_setting_info->iga_path ==
-			IGA2)) {
-			viafb_fill_crtc_timing(crt_timing1, vmode_tbl1,
-				video_bpp1 / 8,
-				viaparinfo->crt_setting_info->iga_path);
-		} else {
-			viafb_fill_crtc_timing(crt_timing, vmode_tbl,
-				video_bpp / 8,
-				viaparinfo->crt_setting_info->iga_path);
-		}
+		if (viaparinfo->shared->iga2_devices & VIA_CRT
+			&& viafb_SAMM_ON)
+			viafb_fill_crtc_timing(&var2, cxres, cyres, IGA2);
+		else
+			viafb_fill_crtc_timing(&viafbinfo->var, 0, 0,
+				(viaparinfo->shared->iga1_devices & VIA_CRT)
+				? IGA1 : IGA2);
 
 		/* Patch if set_hres is not 8 alignment (1366) to viafb_setmode
 		to 8 alignment (1368),there is several pixels (2 pixels)
 		on right side of screen. */
-		if (vmode_tbl->crtc[0].crtc.hor_addr % 8) {
+		if (viafbinfo->var.xres % 8) {
 			viafb_unlock_crt();
 			viafb_write_reg(CR02, VIACR,
 				viafb_read_reg(VIACR, CR02) - 1);
@@ -2474,60 +1909,46 @@ int viafb_setmode(struct VideoModeTable *vmode_tbl, int video_bpp,
 	}
 
 	if (viafb_DVI_ON) {
-		if (viafb_SAMM_ON &&
-			(viaparinfo->tmds_setting_info->iga_path == IGA2)) {
-			viafb_dvi_set_mode(viafb_get_mode
-				     (viaparinfo->tmds_setting_info->h_active,
-				      viaparinfo->tmds_setting_info->
-				      v_active),
-				     video_bpp1, viaparinfo->
-				     tmds_setting_info->iga_path);
-		} else {
-			viafb_dvi_set_mode(viafb_get_mode
-				     (viaparinfo->tmds_setting_info->h_active,
-				      viaparinfo->
-				      tmds_setting_info->v_active),
-				     video_bpp, viaparinfo->
-				     tmds_setting_info->iga_path);
-		}
+		if (viaparinfo->shared->tmds_setting_info.iga_path == IGA2
+			&& viafb_SAMM_ON)
+			viafb_dvi_set_mode(&var2, cxres, cyres, IGA2);
+		else
+			viafb_dvi_set_mode(&viafbinfo->var, 0, 0,
+				viaparinfo->tmds_setting_info->iga_path);
 	}
 
 	if (viafb_LCD_ON) {
 		if (viafb_SAMM_ON &&
 			(viaparinfo->lvds_setting_info->iga_path == IGA2)) {
-			viaparinfo->lvds_setting_info->bpp = video_bpp1;
-			viafb_lcd_set_mode(crt_timing1, viaparinfo->
-				lvds_setting_info,
-				     &viaparinfo->chip_info->lvds_chip_info);
+			viafb_lcd_set_mode(&var2, cxres, cyres,
+				viaparinfo->lvds_setting_info,
+				&viaparinfo->chip_info->lvds_chip_info);
 		} else {
 			/* IGA1 doesn't have LCD scaling, so set it center. */
 			if (viaparinfo->lvds_setting_info->iga_path == IGA1) {
 				viaparinfo->lvds_setting_info->display_method =
 				    LCD_CENTERING;
 			}
-			viaparinfo->lvds_setting_info->bpp = video_bpp;
-			viafb_lcd_set_mode(crt_timing, viaparinfo->
-				lvds_setting_info,
-				     &viaparinfo->chip_info->lvds_chip_info);
+			viafb_lcd_set_mode(&viafbinfo->var, 0, 0,
+				viaparinfo->lvds_setting_info,
+				&viaparinfo->chip_info->lvds_chip_info);
 		}
 	}
 	if (viafb_LCD2_ON) {
 		if (viafb_SAMM_ON &&
 			(viaparinfo->lvds_setting_info2->iga_path == IGA2)) {
-			viaparinfo->lvds_setting_info2->bpp = video_bpp1;
-			viafb_lcd_set_mode(crt_timing1, viaparinfo->
-				lvds_setting_info2,
-				     &viaparinfo->chip_info->lvds_chip_info2);
+			viafb_lcd_set_mode(&var2, cxres, cyres,
+				viaparinfo->lvds_setting_info2,
+				&viaparinfo->chip_info->lvds_chip_info2);
 		} else {
 			/* IGA1 doesn't have LCD scaling, so set it center. */
 			if (viaparinfo->lvds_setting_info2->iga_path == IGA1) {
 				viaparinfo->lvds_setting_info2->display_method =
 				    LCD_CENTERING;
 			}
-			viaparinfo->lvds_setting_info2->bpp = video_bpp;
-			viafb_lcd_set_mode(crt_timing, viaparinfo->
-				lvds_setting_info2,
-				     &viaparinfo->chip_info->lvds_chip_info2);
+			viafb_lcd_set_mode(&viafbinfo->var, 0, 0,
+				viaparinfo->lvds_setting_info2,
+				&viaparinfo->chip_info->lvds_chip_info2);
 		}
 	}
 
@@ -2537,9 +1958,9 @@ int viafb_setmode(struct VideoModeTable *vmode_tbl, int video_bpp,
 
 	/* If set mode normally, save resolution information for hot-plug . */
 	if (!viafb_hotplug) {
-		viafb_hotplug_Xres = vmode_tbl->crtc[0].crtc.hor_addr;
-		viafb_hotplug_Yres = vmode_tbl->crtc[0].crtc.ver_addr;
-		viafb_hotplug_bpp = video_bpp;
+		viafb_hotplug_Xres = viafbinfo->var.xres;
+		viafb_hotplug_Yres = viafbinfo->var.yres;
+		viafb_hotplug_bpp = viafbinfo->var.bits_per_pixel;
 		viafb_hotplug_refresh = viafb_refresh;
 
 		if (viafb_DVI_ON)
@@ -2548,60 +1969,63 @@ int viafb_setmode(struct VideoModeTable *vmode_tbl, int video_bpp,
 			viafb_DeviceStatus = CRT_Device;
 	}
 	device_on();
-	if (!viafb_dual_fb)
-		via_set_sync_polarity(devices, get_sync(viafbinfo));
+	if (!viafb_SAMM_ON)
+		via_set_sync_polarity(devices, get_sync(&viafbinfo->var));
 	else {
 		via_set_sync_polarity(viaparinfo->shared->iga1_devices,
-			get_sync(viafbinfo));
+			get_sync(&viafbinfo->var));
 		via_set_sync_polarity(viaparinfo->shared->iga2_devices,
-			get_sync(viafbinfo1));
+			get_sync(&var2));
 	}
+
+	clock.set_engine_pll_state(VIA_STATE_ON);
+	clock.set_primary_clock_source(VIA_CLKSRC_X1, true);
+	clock.set_secondary_clock_source(VIA_CLKSRC_X1, true);
+
+#ifdef CONFIG_FB_VIA_X_COMPATIBILITY
+	clock.set_primary_pll_state(VIA_STATE_ON);
+	clock.set_primary_clock_state(VIA_STATE_ON);
+	clock.set_secondary_pll_state(VIA_STATE_ON);
+	clock.set_secondary_clock_state(VIA_STATE_ON);
+#else
+	if (viaparinfo->shared->iga1_devices) {
+		clock.set_primary_pll_state(VIA_STATE_ON);
+		clock.set_primary_clock_state(VIA_STATE_ON);
+	} else {
+		clock.set_primary_pll_state(VIA_STATE_OFF);
+		clock.set_primary_clock_state(VIA_STATE_OFF);
+	}
+
+	if (viaparinfo->shared->iga2_devices) {
+		clock.set_secondary_pll_state(VIA_STATE_ON);
+		clock.set_secondary_clock_state(VIA_STATE_ON);
+	} else {
+		clock.set_secondary_pll_state(VIA_STATE_OFF);
+		clock.set_secondary_clock_state(VIA_STATE_OFF);
+	}
+#endif /*CONFIG_FB_VIA_X_COMPATIBILITY*/
 
 	via_set_state(devices, VIA_STATE_ON);
 	device_screen_on();
 	return 1;
 }
 
-int viafb_get_pixclock(int hres, int vres, int vmode_refresh)
-{
-	int i;
-	struct crt_mode_table *best;
-	struct VideoModeTable *vmode = viafb_get_mode(hres, vres);
-
-	if (!vmode)
-		return RES_640X480_60HZ_PIXCLOCK;
-
-	best = &vmode->crtc[0];
-	for (i = 1; i < vmode->mode_array; i++) {
-		if (abs(vmode->crtc[i].refresh_rate - vmode_refresh)
-			< abs(best->refresh_rate - vmode_refresh))
-			best = &vmode->crtc[i];
-	}
-
-	return 1000000000 / (best->crtc.hor_total * best->crtc.ver_total)
-		* 1000 / best->refresh_rate;
-}
-
 int viafb_get_refresh(int hres, int vres, u32 long_refresh)
 {
-	int i;
-	struct crt_mode_table *best;
-	struct VideoModeTable *vmode = viafb_get_mode(hres, vres);
+	const struct fb_videomode *best;
 
-	if (!vmode)
+	best = viafb_get_best_mode(hres, vres, long_refresh);
+	if (!best)
 		return 60;
 
-	best = &vmode->crtc[0];
-	for (i = 1; i < vmode->mode_array; i++) {
-		if (abs(vmode->crtc[i].refresh_rate - long_refresh)
-			< abs(best->refresh_rate - long_refresh))
-			best = &vmode->crtc[i];
+	if (abs(best->refresh - long_refresh) > 3) {
+		if (hres == 1200 && vres == 900)
+			return 49; /* OLPC DCON only supports 50 Hz */
+		else
+			return 60;
 	}
 
-	if (abs(best->refresh_rate - long_refresh) > 3)
-		return 60;
-
-	return best->refresh_rate;
+	return best->refresh;
 }
 
 static void device_off(void)
@@ -2694,33 +2118,17 @@ void viafb_set_dpa_gfx(int output_interface, struct GFX_DPA_SETTING\
 	}
 }
 
-/*According var's xres, yres fill var's other timing information*/
-void viafb_fill_var_timing_info(struct fb_var_screeninfo *var, int refresh,
-	struct VideoModeTable *vmode_tbl)
+void viafb_fill_var_timing_info(struct fb_var_screeninfo *var,
+	const struct fb_videomode *mode)
 {
-	struct crt_mode_table *crt_timing = NULL;
-	struct display_timing crt_reg;
-	int i = 0, index = 0;
-	crt_timing = vmode_tbl->crtc;
-	for (i = 0; i < vmode_tbl->mode_array; i++) {
-		index = i;
-		if (crt_timing[i].refresh_rate == refresh)
-			break;
-	}
-
-	crt_reg = crt_timing[index].crtc;
-	var->pixclock = viafb_get_pixclock(var->xres, var->yres, refresh);
-	var->left_margin =
-	    crt_reg.hor_total - (crt_reg.hor_sync_start + crt_reg.hor_sync_end);
-	var->right_margin = crt_reg.hor_sync_start - crt_reg.hor_addr;
-	var->hsync_len = crt_reg.hor_sync_end;
-	var->upper_margin =
-	    crt_reg.ver_total - (crt_reg.ver_sync_start + crt_reg.ver_sync_end);
-	var->lower_margin = crt_reg.ver_sync_start - crt_reg.ver_addr;
-	var->vsync_len = crt_reg.ver_sync_end;
-	var->sync = 0;
-	if (crt_timing[index].h_sync_polarity == POSITIVE)
-		var->sync |= FB_SYNC_HOR_HIGH_ACT;
-	if (crt_timing[index].v_sync_polarity == POSITIVE)
-		var->sync |= FB_SYNC_VERT_HIGH_ACT;
+	var->pixclock = mode->pixclock;
+	var->xres = mode->xres;
+	var->yres = mode->yres;
+	var->left_margin = mode->left_margin;
+	var->right_margin = mode->right_margin;
+	var->hsync_len = mode->hsync_len;
+	var->upper_margin = mode->upper_margin;
+	var->lower_margin = mode->lower_margin;
+	var->vsync_len = mode->vsync_len;
+	var->sync = mode->sync;
 }

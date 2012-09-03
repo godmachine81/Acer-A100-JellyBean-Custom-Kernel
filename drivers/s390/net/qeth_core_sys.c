@@ -434,8 +434,8 @@ static ssize_t qeth_dev_layer2_store(struct device *dev,
 		goto out;
 	else {
 		card->info.mac_bits  = 0;
-		if (card->discipline.ccwgdriver) {
-			card->discipline.ccwgdriver->remove(card->gdev);
+		if (card->discipline) {
+			card->discipline->remove(card->gdev);
 			qeth_core_free_discipline(card);
 		}
 	}
@@ -444,7 +444,7 @@ static ssize_t qeth_dev_layer2_store(struct device *dev,
 	if (rc)
 		goto out;
 
-	rc = card->discipline.ccwgdriver->probe(card->gdev);
+	rc = card->discipline->setup(card->gdev);
 out:
 	mutex_unlock(&card->discipline_mutex);
 	return rc ? rc : count;
@@ -529,6 +529,66 @@ out:
 
 static DEVICE_ATTR(isolation, 0644, qeth_dev_isolation_show,
 		   qeth_dev_isolation_store);
+
+static ssize_t qeth_hw_trap_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct qeth_card *card = dev_get_drvdata(dev);
+
+	if (!card)
+		return -EINVAL;
+	if (card->info.hwtrap)
+		return snprintf(buf, 5, "arm\n");
+	else
+		return snprintf(buf, 8, "disarm\n");
+}
+
+static ssize_t qeth_hw_trap_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct qeth_card *card = dev_get_drvdata(dev);
+	int rc = 0;
+	char *tmp, *curtoken;
+	int state = 0;
+	curtoken = (char *)buf;
+
+	if (!card)
+		return -EINVAL;
+
+	mutex_lock(&card->conf_mutex);
+	if (card->state == CARD_STATE_SOFTSETUP || card->state == CARD_STATE_UP)
+		state = 1;
+	tmp = strsep(&curtoken, "\n");
+
+	if (!strcmp(tmp, "arm") && !card->info.hwtrap) {
+		if (state) {
+			if (qeth_is_diagass_supported(card,
+			    QETH_DIAGS_CMD_TRAP)) {
+				rc = qeth_hw_trap(card, QETH_DIAGS_TRAP_ARM);
+				if (!rc)
+					card->info.hwtrap = 1;
+			} else
+				rc = -EINVAL;
+		} else
+			card->info.hwtrap = 1;
+	} else if (!strcmp(tmp, "disarm") && card->info.hwtrap) {
+		if (state) {
+			rc = qeth_hw_trap(card, QETH_DIAGS_TRAP_DISARM);
+			if (!rc)
+				card->info.hwtrap = 0;
+		} else
+			card->info.hwtrap = 0;
+	} else if (!strcmp(tmp, "trap") && state && card->info.hwtrap)
+		rc = qeth_hw_trap(card, QETH_DIAGS_TRAP_CAPTURE);
+	else
+		rc = -EINVAL;
+
+	mutex_unlock(&card->conf_mutex);
+	return rc ? rc : count;
+}
+
+static DEVICE_ATTR(hw_trap, 0644, qeth_hw_trap_show,
+		   qeth_hw_trap_store);
 
 static ssize_t qeth_dev_blkt_show(char *buf, struct qeth_card *card, int value)
 {
@@ -633,7 +693,6 @@ static struct attribute *qeth_blkt_device_attrs[] = {
 	&dev_attr_inter_jumbo.attr,
 	NULL,
 };
-
 static struct attribute_group qeth_device_blkt_group = {
 	.name = "blkt",
 	.attrs = qeth_blkt_device_attrs,
@@ -653,11 +712,17 @@ static struct attribute *qeth_device_attrs[] = {
 	&dev_attr_performance_stats.attr,
 	&dev_attr_layer2.attr,
 	&dev_attr_isolation.attr,
+	&dev_attr_hw_trap.attr,
 	NULL,
 };
-
 static struct attribute_group qeth_device_attr_group = {
 	.attrs = qeth_device_attrs,
+};
+
+const struct attribute_group *qeth_generic_attr_groups[] = {
+	&qeth_device_attr_group,
+	&qeth_device_blkt_group,
+	NULL,
 };
 
 static struct attribute *qeth_osn_device_attrs[] = {
@@ -669,37 +734,10 @@ static struct attribute *qeth_osn_device_attrs[] = {
 	&dev_attr_recover.attr,
 	NULL,
 };
-
 static struct attribute_group qeth_osn_device_attr_group = {
 	.attrs = qeth_osn_device_attrs,
 };
-
-int qeth_core_create_device_attributes(struct device *dev)
-{
-	int ret;
-	ret = sysfs_create_group(&dev->kobj, &qeth_device_attr_group);
-	if (ret)
-		return ret;
-	ret = sysfs_create_group(&dev->kobj, &qeth_device_blkt_group);
-	if (ret)
-		sysfs_remove_group(&dev->kobj, &qeth_device_attr_group);
-
-	return 0;
-}
-
-void qeth_core_remove_device_attributes(struct device *dev)
-{
-	sysfs_remove_group(&dev->kobj, &qeth_device_attr_group);
-	sysfs_remove_group(&dev->kobj, &qeth_device_blkt_group);
-}
-
-int qeth_core_create_osn_attributes(struct device *dev)
-{
-	return sysfs_create_group(&dev->kobj, &qeth_osn_device_attr_group);
-}
-
-void qeth_core_remove_osn_attributes(struct device *dev)
-{
-	sysfs_remove_group(&dev->kobj, &qeth_osn_device_attr_group);
-	return;
-}
+const struct attribute_group *qeth_osn_attr_groups[] = {
+	&qeth_osn_device_attr_group,
+	NULL,
+};

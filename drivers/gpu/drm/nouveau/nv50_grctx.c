@@ -40,6 +40,12 @@
 #define CP_FLAG_UNK0B                 ((0 * 32) + 0xb)
 #define CP_FLAG_UNK0B_CLEAR           0
 #define CP_FLAG_UNK0B_SET             1
+#define CP_FLAG_XFER_SWITCH           ((0 * 32) + 0xe)
+#define CP_FLAG_XFER_SWITCH_DISABLE   0
+#define CP_FLAG_XFER_SWITCH_ENABLE    1
+#define CP_FLAG_STATE                 ((0 * 32) + 0x1c)
+#define CP_FLAG_STATE_STOPPED         0
+#define CP_FLAG_STATE_RUNNING         1
 #define CP_FLAG_UNK1D                 ((0 * 32) + 0x1d)
 #define CP_FLAG_UNK1D_CLEAR           0
 #define CP_FLAG_UNK1D_SET             1
@@ -166,8 +172,8 @@ static void nv50_graph_construct_xfer2(struct nouveau_grctx *ctx);
 
 /* Main function: construct the ctxprog skeleton, call the other functions. */
 
-int
-nv50_grctx_init(struct nouveau_grctx *ctx)
+static int
+nv50_grctx_generate(struct nouveau_grctx *ctx)
 {
 	struct drm_nouveau_private *dev_priv = ctx->dev->dev_private;
 
@@ -194,6 +200,9 @@ nv50_grctx_init(struct nouveau_grctx *ctx)
 				   "the devs.\n");
 		return -ENOSYS;
 	}
+
+	cp_set (ctx, STATE, RUNNING);
+	cp_set (ctx, XFER_SWITCH, ENABLE);
 	/* decide whether we're loading/unloading the context */
 	cp_bra (ctx, AUTO_SAVE, PENDING, cp_setup_save);
 	cp_bra (ctx, USER_SAVE, PENDING, cp_setup_save);
@@ -201,7 +210,7 @@ nv50_grctx_init(struct nouveau_grctx *ctx)
 	cp_name(ctx, cp_check_load);
 	cp_bra (ctx, AUTO_LOAD, PENDING, cp_setup_auto_load);
 	cp_bra (ctx, USER_LOAD, PENDING, cp_setup_load);
-	cp_bra (ctx, ALWAYS, TRUE, cp_exit);
+	cp_bra (ctx, ALWAYS, TRUE, cp_prepare_exit);
 
 	/* setup for context load */
 	cp_name(ctx, cp_setup_auto_load);
@@ -260,10 +269,39 @@ nv50_grctx_init(struct nouveau_grctx *ctx)
 	cp_name(ctx, cp_exit);
 	cp_set (ctx, USER_SAVE, NOT_PENDING);
 	cp_set (ctx, USER_LOAD, NOT_PENDING);
+	cp_set (ctx, XFER_SWITCH, DISABLE);
+	cp_set (ctx, STATE, STOPPED);
 	cp_out (ctx, CP_END);
 	ctx->ctxvals_pos += 0x400; /* padding... no idea why you need it */
 
 	return 0;
+}
+
+void
+nv50_grctx_fill(struct drm_device *dev, struct nouveau_gpuobj *mem)
+{
+	nv50_grctx_generate(&(struct nouveau_grctx) {
+			     .dev = dev,
+			     .mode = NOUVEAU_GRCTX_VALS,
+			     .data = mem,
+			   });
+}
+
+int
+nv50_grctx_init(struct drm_device *dev, u32 *data, u32 max, u32 *len, u32 *cnt)
+{
+	struct nouveau_grctx ctx = {
+		.dev = dev,
+		.mode = NOUVEAU_GRCTX_PROG,
+		.data = data,
+		.ctxprog_max = max
+	};
+	int ret;
+
+	ret = nv50_grctx_generate(&ctx);
+	*cnt = ctx.ctxvals_pos * 4;
+	*len = ctx.ctxprog_len;
+	return ret;
 }
 
 /*
@@ -590,7 +628,7 @@ nv50_graph_construct_mmio(struct nouveau_grctx *ctx)
 					gr_def(ctx, offset + 0x1c, 0x00880000);
 					break;
 				case 0x86:
-					gr_def(ctx, offset + 0x1c, 0x008c0000);
+					gr_def(ctx, offset + 0x1c, 0x018c0000);
 					break;
 				case 0x92:
 				case 0x96:
@@ -747,7 +785,7 @@ nv50_graph_construct_mmio(struct nouveau_grctx *ctx)
 				gr_def(ctx, offset + 0x64, 0x0000001f);
 				gr_def(ctx, offset + 0x68, 0x0000000f);
 				gr_def(ctx, offset + 0x6c, 0x0000000f);
-			} else if(dev_priv->chipset < 0xa0) {
+			} else if (dev_priv->chipset < 0xa0) {
 				cp_ctx(ctx, offset + 0x50, 1);
 				cp_ctx(ctx, offset + 0x70, 1);
 			} else {
@@ -924,7 +962,7 @@ nv50_graph_construct_mmio_ddata(struct nouveau_grctx *ctx)
 		dd_emit(ctx, 1, 0);	/* 0000007f MULTISAMPLE_SAMPLES_LOG2 */
 	} else {
 		dd_emit(ctx, 1, 0);	/* 0000000f MULTISAMPLE_SAMPLES_LOG2 */
-	} 
+	}
 	dd_emit(ctx, 1, 0xc);		/* 000000ff SEMANTIC_COLOR.BFC0_ID */
 	if (dev_priv->chipset != 0x50)
 		dd_emit(ctx, 1, 0);	/* 00000001 SEMANTIC_COLOR.CLMP_EN */
@@ -1803,9 +1841,7 @@ nv50_graph_construct_gene_unk24xx(struct nouveau_grctx *ctx)
 		xf_emit(ctx, 1, 0);	/* 1ff */
 		xf_emit(ctx, 8, 0);	/* 0? */
 		xf_emit(ctx, 9, 0);	/* ffffffff, 7ff */
-	}
-	else
-	{
+	} else {
 		xf_emit(ctx, 0xc, 0);	/* RO */
 		/* SEEK */
 		xf_emit(ctx, 0xe10, 0); /* 190 * 9: 8*ffffffff, 7ff */
@@ -2836,7 +2872,7 @@ nv50_graph_construct_xfer_tprop(struct nouveau_grctx *ctx)
 	xf_emit(ctx, 1, 1);		/* 00000001 DST_LINEAR */
 	if (IS_NVA3F(dev_priv->chipset))
 		xf_emit(ctx, 1, 1);	/* 0000001f tesla UNK169C */
-	if(dev_priv->chipset == 0x50)
+	if (dev_priv->chipset == 0x50)
 		xf_emit(ctx, 1, 0);	/* ff */
 	else
 		xf_emit(ctx, 3, 0);	/* 1, 7, 3ff */

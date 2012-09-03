@@ -37,7 +37,6 @@
 #include <pcmcia/ds.h>
 
 #include <linux/io.h>
-#include <asm/system.h>
 
 #include "airo.h"
 
@@ -164,7 +163,7 @@ static int airo_resume(struct pcmcia_device *link)
 	return 0;
 }
 
-static struct pcmcia_device_id airo_ids[] = {
+static const struct pcmcia_device_id airo_ids[] = {
 	PCMCIA_DEVICE_MANF_CARD(0x015f, 0x000a),
 	PCMCIA_DEVICE_MANF_CARD(0x015f, 0x0005),
 	PCMCIA_DEVICE_MANF_CARD(0x015f, 0x0007),

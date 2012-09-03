@@ -238,6 +238,15 @@ config USB_SERIAL_EDGEPORT_TI
 	  To compile this driver as a module, choose M here: the
 	  module will be called io_ti.
 
+config USB_SERIAL_F81232
+	tristate "USB Fintek F81232 Single Port Serial Driver"
+	help
+	  Say Y here if you want to use the Fintek F81232 single
+	  port usb to serial adapter.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called f81232.
+
 config USB_SERIAL_GARMIN
        tristate "USB Garmin GPS driver"
        help
@@ -252,6 +261,7 @@ config USB_SERIAL_GARMIN
 
 config USB_SERIAL_IPW
         tristate "USB IPWireless (3G UMTS TDD) Driver"
+	select USB_SERIAL_WWAN
 	help
 	  Say Y here if you want to use a IPWireless USB modem such as
 	  the ones supplied by Axity3G/Sentech South Africa.
@@ -416,6 +426,14 @@ config USB_SERIAL_MCT_U232
 	  To compile this driver as a module, choose M here: the
 	  module will be called mct_u232.
 
+config USB_SERIAL_METRO
+	tristate "USB Metrologic Instruments USB-POS Barcode Scanner Driver"
+	---help---
+	  Say Y here if you want to use a USB POS Metrologic barcode scanner.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called metro-usb.
+
 config USB_SERIAL_MOS7720
 	tristate "USB Moschip 7720 Serial Driver"
 	---help---
@@ -526,15 +544,6 @@ config USB_SERIAL_SAFE
 config USB_SERIAL_SAFE_PADDED
 	bool "USB Secure Encapsulated Driver - Padded"
 	depends on USB_SERIAL_SAFE
-
-config USB_SERIAL_SAMBA
-	tristate "USB Atmel SAM Boot Assistant (SAM-BA) driver"
-	help
-	  Say Y here if you want to access the SAM-BA boot application of an
-	  Atmel AT91SAM device.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called sam-ba.
 
 config USB_SERIAL_SIEMENS_MPI
 	tristate "USB Siemens MPI driver"
@@ -660,6 +669,15 @@ config USB_SERIAL_SSU100
 	  To compile this driver as a module, choose M here: the
 	  module will be called ssu100.
 
+config USB_SERIAL_QT2
+	tristate "USB Quatech Serial Driver for USB 2 devices"
+	help
+	  Say Y here if you want to use the Quatech USB 2
+	  serial adapters.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called quatech-serial.
+
 config USB_SERIAL_DEBUG
 	tristate "USB Debugging Device"
 	help
@@ -669,18 +687,5 @@ config USB_SERIAL_DEBUG
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called usb-debug.
-
-config USB_SERIAL_BASEBAND
-	tristate "USB Baseband Driver"
-	help
-	  Say Y here if you want to use USB baseband character driver.
-
-	  This driver may be used as a raw character device driver for
-	  USB modems.  For example, downloading modem firmware upon
-	  modem boot up (for flashless modems), or sending modem
-	  AT commands after modem software is running on device.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called baseband_chr.
 
 endif # USB_SERIAL

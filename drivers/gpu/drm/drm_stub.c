@@ -62,6 +62,26 @@ struct idr drm_minors_idr;
 struct class *drm_class;
 struct proc_dir_entry *drm_proc_root;
 struct dentry *drm_debugfs_root;
+
+int drm_err(const char *func, const char *format, ...)
+{
+	struct va_format vaf;
+	va_list args;
+	int r;
+
+	va_start(args, format);
+
+	vaf.fmt = format;
+	vaf.va = &args;
+
+	r = printk(KERN_ERR "[" DRM_NAME ":%s] *ERROR* %pV", func, &vaf);
+
+	va_end(args);
+
+	return r;
+}
+EXPORT_SYMBOL(drm_err);
+
 void drm_ut_debug_printk(unsigned int request_level,
 			 const char *prefix,
 			 const char *function_name,
@@ -78,6 +98,7 @@ void drm_ut_debug_printk(unsigned int request_level,
 	}
 }
 EXPORT_SYMBOL(drm_ut_debug_printk);
+
 static int drm_minor_get_id(struct drm_device *dev, int type)
 {
 	int new_id;
@@ -101,11 +122,10 @@ again:
 	ret = idr_get_new_above(&drm_minors_idr, NULL,
 				base, &new_id);
 	mutex_unlock(&dev->struct_mutex);
-	if (ret == -EAGAIN) {
+	if (ret == -EAGAIN)
 		goto again;
-	} else if (ret) {
+	else if (ret)
 		return ret;
-	}
 
 	if (new_id >= limit) {
 		idr_remove(&drm_minors_idr, new_id);
@@ -190,7 +210,7 @@ EXPORT_SYMBOL(drm_master_put);
 int drm_setmaster_ioctl(struct drm_device *dev, void *data,
 			struct drm_file *file_priv)
 {
-	int ret = 0;
+	int ret;
 
 	if (file_priv->is_master)
 		return 0;
@@ -298,6 +318,7 @@ int drm_fill_in_dev(struct drm_device *dev,
 	drm_lastclose(dev);
 	return retcode;
 }
+EXPORT_SYMBOL(drm_fill_in_dev);
 
 
 /**
@@ -376,6 +397,7 @@ err_idr:
 	*minor = NULL;
 	return ret;
 }
+EXPORT_SYMBOL(drm_get_minor);
 
 /**
  * Put a secondary minor number.
@@ -406,6 +428,12 @@ int drm_put_minor(struct drm_minor **minor_p)
 	kfree(minor);
 	*minor_p = NULL;
 	return 0;
+}
+EXPORT_SYMBOL(drm_put_minor);
+
+static void drm_unplug_minor(struct drm_minor *minor)
+{
+	drm_sysfs_device_remove(minor);
 }
 
 /**
@@ -471,3 +499,21 @@ void drm_put_dev(struct drm_device *dev)
 	kfree(dev);
 }
 EXPORT_SYMBOL(drm_put_dev);
+
+void drm_unplug_dev(struct drm_device *dev)
+{
+	/* for a USB device */
+	if (drm_core_check_feature(dev, DRIVER_MODESET))
+		drm_unplug_minor(dev->control);
+	drm_unplug_minor(dev->primary);
+
+	mutex_lock(&drm_global_mutex);
+
+	drm_device_set_unplugged(dev);
+
+	if (dev->open_count == 0) {
+		drm_put_dev(dev);
+	}
+	mutex_unlock(&drm_global_mutex);
+}
+EXPORT_SYMBOL(drm_unplug_dev);

@@ -49,10 +49,6 @@ ACPI_MODULE_NAME("processor_perflib");
 
 static DEFINE_MUTEX(performance_mutex);
 
-/* Use cpufreq debug layer for _PPC changes. */
-#define cpufreq_printk(msg...) cpufreq_debug_printk(CPUFREQ_DEBUG_CORE, \
-						"cpufreq-core", msg)
-
 /*
  * _PPC support is implemented as a CPUfreq policy notifier:
  * This means each time a CPUfreq driver registered also with
@@ -145,7 +141,7 @@ static int acpi_processor_get_platform_limit(struct acpi_processor *pr)
 		return -ENODEV;
 	}
 
-	cpufreq_printk("CPU %d: _PPC is %d - frequency %s limited\n", pr->id,
+	pr_debug("CPU %d: _PPC is %d - frequency %s limited\n", pr->id,
 		       (int)ppc, ppc ? "" : "not");
 
 	pr->performance_platform_limit = (int)ppc;
@@ -244,6 +240,28 @@ void acpi_processor_ppc_exit(void)
 	acpi_processor_ppc_status &= ~PPC_REGISTERED;
 }
 
+/*
+ * Do a quick check if the systems looks like it should use ACPI
+ * cpufreq. We look at a _PCT method being available, but don't
+ * do a whole lot of sanity checks.
+ */
+void acpi_processor_load_module(struct acpi_processor *pr)
+{
+	static int requested;
+	acpi_status status = 0;
+	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+
+	if (!arch_has_acpi_pdc() || requested)
+		return;
+	status = acpi_evaluate_object(pr->handle, "_PCT", NULL, &buffer);
+	if (!ACPI_FAILURE(status)) {
+		printk(KERN_INFO PREFIX "Requesting acpi_cpufreq\n");
+		request_module_nowait("acpi_cpufreq");
+		requested = 1;
+	}
+	kfree(buffer.pointer);
+}
+
 static int acpi_processor_get_performance_control(struct acpi_processor *pr)
 {
 	int result = 0;
@@ -315,6 +333,7 @@ static int acpi_processor_get_performance_states(struct acpi_processor *pr)
 	struct acpi_buffer state = { 0, NULL };
 	union acpi_object *pss = NULL;
 	int i;
+	int last_invalid = -1;
 
 
 	status = acpi_evaluate_object(pr->handle, "_PSS", NULL, &buffer);
@@ -376,13 +395,32 @@ static int acpi_processor_get_performance_states(struct acpi_processor *pr)
 		    ((u32)(px->core_frequency * 1000) !=
 		     (px->core_frequency * 1000))) {
 			printk(KERN_ERR FW_BUG PREFIX
-			       "Invalid BIOS _PSS frequency: 0x%llx MHz\n",
-			       px->core_frequency);
-			result = -EFAULT;
-			kfree(pr->performance->states);
-			goto end;
+			       "Invalid BIOS _PSS frequency found for processor %d: 0x%llx MHz\n",
+			       pr->id, px->core_frequency);
+			if (last_invalid == -1)
+				last_invalid = i;
+		} else {
+			if (last_invalid != -1) {
+				/*
+				 * Copy this valid entry over last_invalid entry
+				 */
+				memcpy(&(pr->performance->states[last_invalid]),
+				       px, sizeof(struct acpi_processor_px));
+				++last_invalid;
+			}
 		}
 	}
+
+	if (last_invalid == 0) {
+		printk(KERN_ERR FW_BUG PREFIX
+		       "No valid BIOS _PSS frequency found for processor %d\n", pr->id);
+		result = -EFAULT;
+		kfree(pr->performance->states);
+		pr->performance->states = NULL;
+	}
+
+	if (last_invalid > 0)
+		pr->performance->state_count = last_invalid;
 
       end:
 	kfree(buffer.pointer);

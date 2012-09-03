@@ -102,10 +102,10 @@ static void autcpu12_hwcontrol(struct mtd_info *mtd, int cmd,
 		void __iomem *addr;
 		unsigned char bits;
 
-		addr = CS89712_VIRT_BASE + AUTCPU12_SMC_PORT_OFFSET;
-		bits = (ctrl & NAND_CLE) << 4;
+		bits = clps_readb(AUTCPU12_SMC_PORT_OFFSET) & ~0x30;
+		bits |= (ctrl & NAND_CLE) << 4;
 		bits |= (ctrl & NAND_ALE) << 2;
-		writeb((readb(addr) & ~0x30) | bits, addr);
+		clps_writeb(bits, AUTCPU12_SMC_PORT_OFFSET);
 
 		addr = autcpu12_fio_base + AUTCPU12_SMC_SELECT_OFFSET;
 		writeb((readb(addr) & ~0x1) | (ctrl & NAND_NCE), addr);
@@ -120,9 +120,7 @@ static void autcpu12_hwcontrol(struct mtd_info *mtd, int cmd,
  */
 int autcpu12_device_ready(struct mtd_info *mtd)
 {
-	void __iomem *addr = CS89712_VIRT_BASE + AUTCPU12_SMC_PORT_OFFSET;
-
-	return readb(addr) & AUTCPU12_SMC_RDY;
+	return clps_readb(AUTCPU12_SMC_PORT_OFFSET) & AUTCPU12_SMC_RDY;
 }
 
 /*
@@ -172,9 +170,9 @@ static int __init autcpu12_init(void)
 
 	/* Enable the following for a flash based bad block table */
 	/*
-	   this->options = NAND_USE_FLASH_BBT;
+	   this->bbt_options = NAND_BBT_USE_FLASH;
 	 */
-	this->options = NAND_USE_FLASH_BBT;
+	this->bbt_options = NAND_BBT_USE_FLASH;
 
 	/* Scan to find existence of the device */
 	if (nand_scan(autcpu12_mtd, 1)) {
@@ -185,20 +183,20 @@ static int __init autcpu12_init(void)
 	/* Register the partitions */
 	switch (autcpu12_mtd->size) {
 		case SZ_16M:
-			add_mtd_partitions(autcpu12_mtd, partition_info16k,
-					   NUM_PARTITIONS16K);
+			mtd_device_register(autcpu12_mtd, partition_info16k,
+					    NUM_PARTITIONS16K);
 			break;
 		case SZ_32M:
-			add_mtd_partitions(autcpu12_mtd, partition_info32k,
-					   NUM_PARTITIONS32K);
+			mtd_device_register(autcpu12_mtd, partition_info32k,
+					    NUM_PARTITIONS32K);
 			break;
 		case SZ_64M:
-			add_mtd_partitions(autcpu12_mtd, partition_info64k,
-					   NUM_PARTITIONS64K);
+			mtd_device_register(autcpu12_mtd, partition_info64k,
+					    NUM_PARTITIONS64K);
 			break;
 		case SZ_128M:
-			add_mtd_partitions(autcpu12_mtd, partition_info128k,
-					   NUM_PARTITIONS128K);
+			mtd_device_register(autcpu12_mtd, partition_info128k,
+					    NUM_PARTITIONS128K);
 			break;
 		default:
 			printk("Unsupported SmartMedia device\n");

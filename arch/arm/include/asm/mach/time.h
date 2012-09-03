@@ -10,8 +10,6 @@
 #ifndef __ASM_ARM_MACH_TIME_H
 #define __ASM_ARM_MACH_TIME_H
 
-#include <linux/sysdev.h>
-
 /*
  * This is our kernel timer structure.
  *
@@ -34,7 +32,6 @@
  *   timer interrupt which may be pending.
  */
 struct sys_timer {
-	struct sys_device	dev;
 	void			(*init)(void);
 	void			(*suspend)(void);
 	void			(*resume)(void);
@@ -44,5 +41,10 @@ struct sys_timer {
 };
 
 extern void timer_tick(void);
+
+struct timespec;
+typedef void (*clock_access_fn)(struct timespec *);
+extern int register_persistent_clock(clock_access_fn read_boot,
+				     clock_access_fn read_persistent);
 
 #endif

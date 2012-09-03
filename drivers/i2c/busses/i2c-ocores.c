@@ -49,13 +49,13 @@
 #include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/platform_device.h>
-#include <linux/mfd/core.h>
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/wait.h>
 #include <linux/i2c-ocores.h>
 #include <linux/slab.h>
 #include <linux/io.h>
+#include <linux/of_i2c.h>
 
 struct ocores_i2c {
 	void __iomem *base;
@@ -306,7 +306,7 @@ static int __devinit ocores_i2c_probe(struct platform_device *pdev)
 		return -EIO;
 	}
 
-	pdata = mfd_get_data(pdev);
+	pdata = pdev->dev.platform_data;
 	if (pdata) {
 		i2c->regstep = pdata->regstep;
 		i2c->clock_khz = pdata->clock_khz;
@@ -344,6 +344,8 @@ static int __devinit ocores_i2c_probe(struct platform_device *pdev)
 	if (pdata) {
 		for (i = 0; i < pdata->num_devices; i++)
 			i2c_new_device(&i2c->adap, pdata->devices + i);
+	} else {
+		of_i2c_register_devices(&i2c->adap);
 	}
 
 	return 0;
@@ -395,9 +397,6 @@ static struct of_device_id ocores_i2c_match[] = {
 };
 MODULE_DEVICE_TABLE(of, ocores_i2c_match);
 
-/* work with hotplug and coldplug */
-MODULE_ALIAS("platform:ocores-i2c");
-
 static struct platform_driver ocores_i2c_driver = {
 	.probe   = ocores_i2c_probe,
 	.remove  = __devexit_p(ocores_i2c_remove),
@@ -410,19 +409,9 @@ static struct platform_driver ocores_i2c_driver = {
 	},
 };
 
-static int __init ocores_i2c_init(void)
-{
-	return platform_driver_register(&ocores_i2c_driver);
-}
-
-static void __exit ocores_i2c_exit(void)
-{
-	platform_driver_unregister(&ocores_i2c_driver);
-}
-
-module_init(ocores_i2c_init);
-module_exit(ocores_i2c_exit);
+module_platform_driver(ocores_i2c_driver);
 
 MODULE_AUTHOR("Peter Korsgaard <jacmet@sunsite.dk>");
 MODULE_DESCRIPTION("OpenCores I2C bus driver");
 MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:ocores-i2c");

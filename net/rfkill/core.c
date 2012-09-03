@@ -29,6 +29,7 @@
 #include <linux/rfkill.h>
 #include <linux/sched.h>
 #include <linux/spinlock.h>
+#include <linux/device.h>
 #include <linux/miscdevice.h>
 #include <linux/wait.h>
 #include <linux/poll.h>
@@ -235,7 +236,7 @@ static bool __rfkill_set_hw_state(struct rfkill *rfkill,
 	else
 		rfkill->state &= ~RFKILL_BLOCK_HW;
 	*change = prev != blocked;
-	any = rfkill->state & RFKILL_BLOCK_ANY;
+	any = !!(rfkill->state & RFKILL_BLOCK_ANY);
 	spin_unlock_irqrestore(&rfkill->lock, flags);
 
 	rfkill_led_trigger_event(rfkill);
@@ -644,7 +645,7 @@ static ssize_t rfkill_soft_store(struct device *dev,
 	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
 
-	err = strict_strtoul(buf, 0, &state);
+	err = kstrtoul(buf, 0, &state);
 	if (err)
 		return err;
 
@@ -688,7 +689,7 @@ static ssize_t rfkill_state_store(struct device *dev,
 	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
 
-	err = strict_strtoul(buf, 0, &state);
+	err = kstrtoul(buf, 0, &state);
 	if (err)
 		return err;
 
@@ -769,7 +770,6 @@ void rfkill_pause_polling(struct rfkill *rfkill)
 }
 EXPORT_SYMBOL(rfkill_pause_polling);
 
-#ifdef CONFIG_RFKILL_PM
 void rfkill_resume_polling(struct rfkill *rfkill)
 {
 	BUG_ON(!rfkill);
@@ -804,17 +804,14 @@ static int rfkill_resume(struct device *dev)
 
 	return 0;
 }
-#endif
 
 static struct class rfkill_class = {
 	.name		= "rfkill",
 	.dev_release	= rfkill_release,
 	.dev_attrs	= rfkill_dev_attrs,
 	.dev_uevent	= rfkill_dev_uevent,
-#ifdef CONFIG_RFKILL_PM
 	.suspend	= rfkill_suspend,
 	.resume		= rfkill_resume,
-#endif
 };
 
 bool rfkill_blocked(struct rfkill *rfkill)
@@ -1028,7 +1025,6 @@ static int rfkill_fop_open(struct inode *inode, struct file *file)
 	 * start getting events from elsewhere but hold mtx to get
 	 * startup events added first
 	 */
-	list_add(&data->list, &rfkill_fds);
 
 	list_for_each_entry(rfkill, &rfkill_list, node) {
 		ev = kzalloc(sizeof(*ev), GFP_KERNEL);
@@ -1037,6 +1033,7 @@ static int rfkill_fop_open(struct inode *inode, struct file *file)
 		rfkill_fill_event(&ev->ev, rfkill, RFKILL_OP_ADD);
 		list_add_tail(&ev->list, &data->events);
 	}
+	list_add(&data->list, &rfkill_fds);
 	mutex_unlock(&data->mtx);
 	mutex_unlock(&rfkill_global_mutex);
 

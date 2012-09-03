@@ -315,7 +315,7 @@ static int altera_uart_startup(struct uart_port *port)
 		return 0;
 	}
 
-	ret = request_irq(port->irq, altera_uart_interrupt, IRQF_DISABLED,
+	ret = request_irq(port->irq, altera_uart_interrupt, 0,
 			DRV_NAME, port);
 	if (ret) {
 		pr_err(DRV_NAME ": unable to attach Altera UART %d "
@@ -377,6 +377,26 @@ static int altera_uart_verify_port(struct uart_port *port,
 	return 0;
 }
 
+#ifdef CONFIG_CONSOLE_POLL
+static int altera_uart_poll_get_char(struct uart_port *port)
+{
+	while (!(altera_uart_readl(port, ALTERA_UART_STATUS_REG) &
+		 ALTERA_UART_STATUS_RRDY_MSK))
+		cpu_relax();
+
+	return altera_uart_readl(port, ALTERA_UART_RXDATA_REG);
+}
+
+static void altera_uart_poll_put_char(struct uart_port *port, unsigned char c)
+{
+	while (!(altera_uart_readl(port, ALTERA_UART_STATUS_REG) &
+		 ALTERA_UART_STATUS_TRDY_MSK))
+		cpu_relax();
+
+	altera_uart_writel(port, c, ALTERA_UART_TXDATA_REG);
+}
+#endif
+
 /*
  *	Define the basic serial functions we support.
  */
@@ -397,34 +417,15 @@ static struct uart_ops altera_uart_ops = {
 	.release_port	= altera_uart_release_port,
 	.config_port	= altera_uart_config_port,
 	.verify_port	= altera_uart_verify_port,
+#ifdef CONFIG_CONSOLE_POLL
+	.poll_get_char	= altera_uart_poll_get_char,
+	.poll_put_char	= altera_uart_poll_put_char,
+#endif
 };
 
 static struct altera_uart altera_uart_ports[CONFIG_SERIAL_ALTERA_UART_MAXPORTS];
 
 #if defined(CONFIG_SERIAL_ALTERA_UART_CONSOLE)
-
-int __init early_altera_uart_setup(struct altera_uart_platform_uart *platp)
-{
-	struct uart_port *port;
-	int i;
-
-	for (i = 0; i < CONFIG_SERIAL_ALTERA_UART_MAXPORTS && platp[i].mapbase; i++) {
-		port = &altera_uart_ports[i].port;
-
-		port->line = i;
-		port->type = PORT_ALTERA_UART;
-		port->mapbase = platp[i].mapbase;
-		port->membase = ioremap(port->mapbase, ALTERA_UART_SIZE);
-		port->iotype = SERIAL_IO_MEM;
-		port->irq = platp[i].irq;
-		port->uartclk = platp[i].uartclk;
-		port->flags = UPF_BOOT_AUTOCONF;
-		port->ops = &altera_uart_ops;
-		port->private_data = platp;
-	}
-
-	return 0;
-}
 
 static void altera_uart_console_putc(struct uart_port *port, const char c)
 {
@@ -540,11 +541,14 @@ static int __devinit altera_uart_probe(struct platform_device *pdev)
 	int i = pdev->id;
 	int ret;
 
-	/* -1 emphasizes that the platform must have one port, no .N suffix */
-	if (i == -1)
-		i = 0;
+	/* if id is -1 scan for a free id and use that one */
+	if (i == -1) {
+		for (i = 0; i < CONFIG_SERIAL_ALTERA_UART_MAXPORTS; i++)
+			if (altera_uart_ports[i].port.mapbase == 0)
+				break;
+	}
 
-	if (i >= CONFIG_SERIAL_ALTERA_UART_MAXPORTS)
+	if (i < 0 || i >= CONFIG_SERIAL_ALTERA_UART_MAXPORTS)
 		return -EINVAL;
 
 	port = &altera_uart_ports[i].port;
@@ -552,7 +556,7 @@ static int __devinit altera_uart_probe(struct platform_device *pdev)
 	res_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (res_mem)
 		port->mapbase = res_mem->start;
-	else if (platp->mapbase)
+	else if (platp)
 		port->mapbase = platp->mapbase;
 	else
 		return -EINVAL;
@@ -560,7 +564,7 @@ static int __devinit altera_uart_probe(struct platform_device *pdev)
 	res_irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
 	if (res_irq)
 		port->irq = res_irq->start;
-	else if (platp->irq)
+	else if (platp)
 		port->irq = platp->irq;
 
 	/* Check platform data first so we can override device node data */
@@ -587,6 +591,8 @@ static int __devinit altera_uart_probe(struct platform_device *pdev)
 	port->ops = &altera_uart_ops;
 	port->flags = UPF_BOOT_AUTOCONF;
 
+	dev_set_drvdata(&pdev->dev, port);
+
 	uart_add_one_port(&altera_uart_driver, port);
 
 	return 0;
@@ -594,14 +600,13 @@ static int __devinit altera_uart_probe(struct platform_device *pdev)
 
 static int __devexit altera_uart_remove(struct platform_device *pdev)
 {
-	struct uart_port *port;
-	int i = pdev->id;
+	struct uart_port *port = dev_get_drvdata(&pdev->dev);
 
-	if (i == -1)
-		i = 0;
-
-	port = &altera_uart_ports[i].port;
-	uart_remove_one_port(&altera_uart_driver, port);
+	if (port) {
+		uart_remove_one_port(&altera_uart_driver, port);
+		dev_set_drvdata(&pdev->dev, NULL);
+		port->mapbase = 0;
+	}
 
 	return 0;
 }
@@ -612,8 +617,6 @@ static struct of_device_id altera_uart_match[] = {
 	{},
 };
 MODULE_DEVICE_TABLE(of, altera_uart_match);
-#else
-#define altera_uart_match NULL
 #endif /* CONFIG_OF */
 
 static struct platform_driver altera_uart_platform_driver = {
@@ -622,7 +625,7 @@ static struct platform_driver altera_uart_platform_driver = {
 	.driver	= {
 		.name		= DRV_NAME,
 		.owner		= THIS_MODULE,
-		.of_match_table	= altera_uart_match,
+		.of_match_table	= of_match_ptr(altera_uart_match),
 	},
 };
 

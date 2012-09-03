@@ -24,10 +24,9 @@
 
 /* driver definitions */
 #define DRIVER_AUTHOR "Joonyoung Shim <jy0922.shim@samsung.com>";
-#define DRIVER_KERNEL_VERSION KERNEL_VERSION(1, 0, 1)
 #define DRIVER_CARD "Silicon Labs Si470x FM Radio Receiver"
 #define DRIVER_DESC "I2C radio driver for Si470x FM Radio Receivers"
-#define DRIVER_VERSION "1.0.1"
+#define DRIVER_VERSION "1.0.2"
 
 /* kernel includes */
 #include <linux/i2c.h>
@@ -163,20 +162,6 @@ static int si470x_get_all_registers(struct si470x_device *radio)
 
 
 /**************************************************************************
- * General Driver Functions - DISCONNECT_CHECK
- **************************************************************************/
-
-/*
- * si470x_disconnect_check - check whether radio disconnects
- */
-int si470x_disconnect_check(struct si470x_device *radio)
-{
-	return 0;
-}
-
-
-
-/**************************************************************************
  * File Operations Interface
  **************************************************************************/
 
@@ -186,26 +171,28 @@ int si470x_disconnect_check(struct si470x_device *radio)
 int si470x_fops_open(struct file *file)
 {
 	struct si470x_device *radio = video_drvdata(file);
-	int retval = 0;
+	int retval = v4l2_fh_open(file);
 
-	mutex_lock(&radio->lock);
-	radio->users++;
+	if (retval)
+		return retval;
 
-	if (radio->users == 1) {
+	if (v4l2_fh_is_singular_file(file)) {
 		/* start radio */
 		retval = si470x_start(radio);
 		if (retval < 0)
 			goto done;
 
-		/* enable RDS interrupt */
+		/* enable RDS / STC interrupt */
 		radio->registers[SYSCONFIG1] |= SYSCONFIG1_RDSIEN;
+		radio->registers[SYSCONFIG1] |= SYSCONFIG1_STCIEN;
 		radio->registers[SYSCONFIG1] &= ~SYSCONFIG1_GPIO2;
 		radio->registers[SYSCONFIG1] |= 0x1 << 2;
 		retval = si470x_set_register(radio, SYSCONFIG1);
 	}
 
 done:
-	mutex_unlock(&radio->lock);
+	if (retval)
+		v4l2_fh_release(file);
 	return retval;
 }
 
@@ -216,21 +203,12 @@ done:
 int si470x_fops_release(struct file *file)
 {
 	struct si470x_device *radio = video_drvdata(file);
-	int retval = 0;
 
-	/* safety check */
-	if (!radio)
-		return -ENODEV;
-
-	mutex_lock(&radio->lock);
-	radio->users--;
-	if (radio->users == 0)
+	if (v4l2_fh_is_singular_file(file))
 		/* stop radio */
-		retval = si470x_stop(radio);
+		si470x_stop(radio);
 
-	mutex_unlock(&radio->lock);
-
-	return retval;
+	return v4l2_fh_release(file);
 }
 
 
@@ -247,7 +225,6 @@ int si470x_vidioc_querycap(struct file *file, void *priv,
 {
 	strlcpy(capability->driver, DRIVER_NAME, sizeof(capability->driver));
 	strlcpy(capability->card, DRIVER_CARD, sizeof(capability->card));
-	capability->version = DRIVER_KERNEL_VERSION;
 	capability->capabilities = V4L2_CAP_HW_FREQ_SEEK |
 		V4L2_CAP_TUNER | V4L2_CAP_RADIO;
 
@@ -261,12 +238,11 @@ int si470x_vidioc_querycap(struct file *file, void *priv,
  **************************************************************************/
 
 /*
- * si470x_i2c_interrupt_work - rds processing function
+ * si470x_i2c_interrupt - interrupt handler
  */
-static void si470x_i2c_interrupt_work(struct work_struct *work)
+static irqreturn_t si470x_i2c_interrupt(int irq, void *dev_id)
 {
-	struct si470x_device *radio = container_of(work,
-			struct si470x_device, radio_work);
+	struct si470x_device *radio = dev_id;
 	unsigned char regnr;
 	unsigned char blocknum;
 	unsigned short bler; /* rds block errors */
@@ -274,21 +250,29 @@ static void si470x_i2c_interrupt_work(struct work_struct *work)
 	unsigned char tmpbuf[3];
 	int retval = 0;
 
+	/* check Seek/Tune Complete */
+	retval = si470x_get_register(radio, STATUSRSSI);
+	if (retval < 0)
+		goto end;
+
+	if (radio->registers[STATUSRSSI] & STATUSRSSI_STC)
+		complete(&radio->completion);
+
 	/* safety checks */
 	if ((radio->registers[SYSCONFIG1] & SYSCONFIG1_RDS) == 0)
-		return;
+		goto end;
 
 	/* Update RDS registers */
-	for (regnr = 0; regnr < RDS_REGISTER_NUM; regnr++) {
+	for (regnr = 1; regnr < RDS_REGISTER_NUM; regnr++) {
 		retval = si470x_get_register(radio, STATUSRSSI + regnr);
 		if (retval < 0)
-			return;
+			goto end;
 	}
 
 	/* get rds blocks */
 	if ((radio->registers[STATUSRSSI] & STATUSRSSI_RDSR) == 0)
 		/* No RDS group ready, better luck next time */
-		return;
+		goto end;
 
 	for (blocknum = 0; blocknum < 4; blocknum++) {
 		switch (blocknum) {
@@ -342,19 +326,8 @@ static void si470x_i2c_interrupt_work(struct work_struct *work)
 
 	if (radio->wr_index != radio->rd_index)
 		wake_up_interruptible(&radio->read_queue);
-}
 
-
-/*
- * si470x_i2c_interrupt - interrupt handler
- */
-static irqreturn_t si470x_i2c_interrupt(int irq, void *dev_id)
-{
-	struct si470x_device *radio = dev_id;
-
-	if (!work_pending(&radio->radio_work))
-		schedule_work(&radio->radio_work);
-
+end:
 	return IRQ_HANDLED;
 }
 
@@ -376,33 +349,25 @@ static int __devinit si470x_i2c_probe(struct i2c_client *client,
 		goto err_initial;
 	}
 
-	INIT_WORK(&radio->radio_work, si470x_i2c_interrupt_work);
-	radio->users = 0;
 	radio->client = client;
 	mutex_init(&radio->lock);
 
-	/* video device allocation and initialization */
-	radio->videodev = video_device_alloc();
-	if (!radio->videodev) {
-		retval = -ENOMEM;
-		goto err_radio;
-	}
-	memcpy(radio->videodev, &si470x_viddev_template,
-			sizeof(si470x_viddev_template));
-	video_set_drvdata(radio->videodev, radio);
+	/* video device initialization */
+	radio->videodev = si470x_viddev_template;
+	video_set_drvdata(&radio->videodev, radio);
 
 	/* power up : need 110ms */
 	radio->registers[POWERCFG] = POWERCFG_ENABLE;
 	if (si470x_set_register(radio, POWERCFG) < 0) {
 		retval = -EIO;
-		goto err_video;
+		goto err_radio;
 	}
 	msleep(110);
 
 	/* get device and chip versions */
 	if (si470x_get_all_registers(radio) < 0) {
 		retval = -EIO;
-		goto err_video;
+		goto err_radio;
 	}
 	dev_info(&client->dev, "DeviceID=0x%4.4hx ChipID=0x%4.4hx\n",
 			radio->registers[DEVICEID], radio->registers[CHIPID]);
@@ -433,7 +398,7 @@ static int __devinit si470x_i2c_probe(struct i2c_client *client,
 	radio->buffer = kmalloc(radio->buf_size, GFP_KERNEL);
 	if (!radio->buffer) {
 		retval = -EIO;
-		goto err_video;
+		goto err_radio;
 	}
 
 	/* rds buffer configuration */
@@ -441,7 +406,11 @@ static int __devinit si470x_i2c_probe(struct i2c_client *client,
 	radio->rd_index = 0;
 	init_waitqueue_head(&radio->read_queue);
 
-	retval = request_irq(client->irq, si470x_i2c_interrupt,
+	/* mark Seek/Tune Complete Interrupt enabled */
+	radio->stci_enabled = true;
+	init_completion(&radio->completion);
+
+	retval = request_threaded_irq(client->irq, NULL, si470x_i2c_interrupt,
 			IRQF_TRIGGER_FALLING, DRIVER_NAME, radio);
 	if (retval) {
 		dev_err(&client->dev, "Failed to register interrupt\n");
@@ -449,7 +418,7 @@ static int __devinit si470x_i2c_probe(struct i2c_client *client,
 	}
 
 	/* register video device */
-	retval = video_register_device(radio->videodev, VFL_TYPE_RADIO,
+	retval = video_register_device(&radio->videodev, VFL_TYPE_RADIO,
 			radio_nr);
 	if (retval) {
 		dev_warn(&client->dev, "Could not register video device\n");
@@ -462,8 +431,6 @@ err_all:
 	free_irq(client->irq, radio);
 err_rds:
 	kfree(radio->buffer);
-err_video:
-	video_device_release(radio->videodev);
 err_radio:
 	kfree(radio);
 err_initial:
@@ -479,8 +446,7 @@ static __devexit int si470x_i2c_remove(struct i2c_client *client)
 	struct si470x_device *radio = i2c_get_clientdata(client);
 
 	free_irq(client->irq, radio);
-	cancel_work_sync(&radio->radio_work);
-	video_unregister_device(radio->videodev);
+	video_unregister_device(&radio->videodev);
 	kfree(radio);
 
 	return 0;
@@ -491,8 +457,9 @@ static __devexit int si470x_i2c_remove(struct i2c_client *client)
 /*
  * si470x_i2c_suspend - suspend the device
  */
-static int si470x_i2c_suspend(struct i2c_client *client, pm_message_t mesg)
+static int si470x_i2c_suspend(struct device *dev)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct si470x_device *radio = i2c_get_clientdata(client);
 
 	/* power down */
@@ -507,8 +474,9 @@ static int si470x_i2c_suspend(struct i2c_client *client, pm_message_t mesg)
 /*
  * si470x_i2c_resume - resume the device
  */
-static int si470x_i2c_resume(struct i2c_client *client)
+static int si470x_i2c_resume(struct device *dev)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct si470x_device *radio = i2c_get_clientdata(client);
 
 	/* power up : need 110ms */
@@ -519,9 +487,8 @@ static int si470x_i2c_resume(struct i2c_client *client)
 
 	return 0;
 }
-#else
-#define si470x_i2c_suspend	NULL
-#define si470x_i2c_resume	NULL
+
+static SIMPLE_DEV_PM_OPS(si470x_i2c_pm, si470x_i2c_suspend, si470x_i2c_resume);
 #endif
 
 
@@ -532,41 +499,16 @@ static struct i2c_driver si470x_i2c_driver = {
 	.driver = {
 		.name		= "si470x",
 		.owner		= THIS_MODULE,
+#ifdef CONFIG_PM
+		.pm		= &si470x_i2c_pm,
+#endif
 	},
 	.probe			= si470x_i2c_probe,
 	.remove			= __devexit_p(si470x_i2c_remove),
-	.suspend		= si470x_i2c_suspend,
-	.resume			= si470x_i2c_resume,
 	.id_table		= si470x_i2c_id,
 };
 
-
-
-/**************************************************************************
- * Module Interface
- **************************************************************************/
-
-/*
- * si470x_i2c_init - module init
- */
-static int __init si470x_i2c_init(void)
-{
-	printk(KERN_INFO DRIVER_DESC ", Version " DRIVER_VERSION "\n");
-	return i2c_add_driver(&si470x_i2c_driver);
-}
-
-
-/*
- * si470x_i2c_exit - module exit
- */
-static void __exit si470x_i2c_exit(void)
-{
-	i2c_del_driver(&si470x_i2c_driver);
-}
-
-
-module_init(si470x_i2c_init);
-module_exit(si470x_i2c_exit);
+module_i2c_driver(si470x_i2c_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR(DRIVER_AUTHOR);

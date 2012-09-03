@@ -31,6 +31,7 @@
 #include <linux/ioport.h>
 #include <linux/delay.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/rtnetlink.h>
 #include <linux/serial_reg.h>
 #include <linux/dma-mapping.h>
@@ -1367,7 +1368,7 @@ static int ali_ircc_net_open(struct net_device *dev)
 		IRDA_WARNING("%s, unable to allocate dma=%d\n",
 			     ALI_IRCC_DRIVER_NAME,
 			     self->io.dma);
-		free_irq(self->io.irq, self);
+		free_irq(self->io.irq, dev);
 		return -EAGAIN;
 	}
 	
@@ -1800,7 +1801,7 @@ static int  ali_ircc_dma_receive_complete(struct ali_ircc_cb *self)
 	MessageCount = inb(iobase+ FIR_LSR)&0x07;
 	
 	if (MessageCount > 0)	
-		IRDA_DEBUG(0, "%s(), Messsage count = %d,\n", __func__ , MessageCount);
+		IRDA_DEBUG(0, "%s(), Message count = %d,\n", __func__ , MessageCount);
 		
 	for (i=0; i<=MessageCount; i++)
 	{

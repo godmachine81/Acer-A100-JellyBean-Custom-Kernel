@@ -647,9 +647,6 @@ int savage_driver_firstopen(struct drm_device *dev)
 	ret = drm_addmap(dev, aperture_base, SAVAGE_APERTURE_SIZE,
 			 _DRM_FRAME_BUFFER, _DRM_WRITE_COMBINING,
 			 &dev_priv->aperture);
-	if (ret)
-		return ret;
-
 	return ret;
 }
 
@@ -738,7 +735,7 @@ static int savage_do_init_bci(struct drm_device * dev, drm_savage_init_t * init)
 			return -EINVAL;
 		}
 		drm_core_ioremap(dev->agp_buffer_map, dev);
-		if (!dev->agp_buffer_map) {
+		if (!dev->agp_buffer_map->handle) {
 			DRM_ERROR("failed to ioremap DMA buffer region!\n");
 			savage_do_cleanup_bci(dev);
 			return -ENOMEM;

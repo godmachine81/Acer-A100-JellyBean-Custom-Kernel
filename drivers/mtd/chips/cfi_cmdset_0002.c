@@ -59,6 +59,9 @@ static void cfi_amdstd_resume (struct mtd_info *);
 static int cfi_amdstd_reboot(struct notifier_block *, unsigned long, void *);
 static int cfi_amdstd_secsi_read (struct mtd_info *, loff_t, size_t, size_t *, u_char *);
 
+static int cfi_amdstd_panic_write(struct mtd_info *mtd, loff_t to, size_t len,
+				  size_t *retlen, const u_char *buf);
+
 static void cfi_amdstd_destroy(struct mtd_info *);
 
 struct mtd_info *cfi_cmdset_0002(struct map_info *, int);
@@ -145,8 +148,7 @@ static void fixup_amd_bootblock(struct mtd_info *mtd)
 	if (((major << 8) | minor) < 0x3131) {
 		/* CFI version 1.0 => don't trust bootloc */
 
-		DEBUG(MTD_DEBUG_LEVEL1,
-			"%s: JEDEC Vendor ID is 0x%02X Device ID is 0x%02X\n",
+		pr_debug("%s: JEDEC Vendor ID is 0x%02X Device ID is 0x%02X\n",
 			map->name, cfi->mfr, cfi->id);
 
 		/* AFAICS all 29LV400 with a bottom boot block have a device ID
@@ -166,8 +168,7 @@ static void fixup_amd_bootblock(struct mtd_info *mtd)
 			 * the 8-bit device ID.
 			 */
 			(cfi->mfr == CFI_MFR_MACRONIX)) {
-			DEBUG(MTD_DEBUG_LEVEL1,
-				"%s: Macronix MX29LV400C with bottom boot block"
+			pr_debug("%s: Macronix MX29LV400C with bottom boot block"
 				" detected\n", map->name);
 			extp->TopBottom = 2;	/* bottom boot */
 		} else
@@ -178,8 +179,7 @@ static void fixup_amd_bootblock(struct mtd_info *mtd)
 			extp->TopBottom = 2;	/* bottom boot */
 		}
 
-		DEBUG(MTD_DEBUG_LEVEL1,
-			"%s: AMD CFI PRI V%c.%c has no boot block field;"
+		pr_debug("%s: AMD CFI PRI V%c.%c has no boot block field;"
 			" deduced %s from Device ID\n", map->name, major, minor,
 			extp->TopBottom == 2 ? "bottom" : "top");
 	}
@@ -191,8 +191,8 @@ static void fixup_use_write_buffers(struct mtd_info *mtd)
 	struct map_info *map = mtd->priv;
 	struct cfi_private *cfi = map->fldrv_priv;
 	if (cfi->cfiq->BufWriteTimeoutTyp) {
-		DEBUG(MTD_DEBUG_LEVEL1, "Using buffer write method\n" );
-		mtd->write = cfi_amdstd_write_buffers;
+		pr_debug("Using buffer write method\n" );
+		mtd->_write = cfi_amdstd_write_buffers;
 	}
 }
 
@@ -231,8 +231,8 @@ static void fixup_convert_atmel_pri(struct mtd_info *mtd)
 static void fixup_use_secsi(struct mtd_info *mtd)
 {
 	/* Setup for chips with a secsi area */
-	mtd->read_user_prot_reg = cfi_amdstd_secsi_read;
-	mtd->read_fact_prot_reg = cfi_amdstd_secsi_read;
+	mtd->_read_user_prot_reg = cfi_amdstd_secsi_read;
+	mtd->_read_fact_prot_reg = cfi_amdstd_secsi_read;
 }
 
 static void fixup_use_erase_chip(struct mtd_info *mtd)
@@ -241,7 +241,7 @@ static void fixup_use_erase_chip(struct mtd_info *mtd)
 	struct cfi_private *cfi = map->fldrv_priv;
 	if ((cfi->cfiq->NumEraseRegions == 1) &&
 		((cfi->cfiq->EraseRegionInfo[0] & 0xffff) == 0)) {
-		mtd->erase = cfi_amdstd_erase_chip;
+		mtd->_erase = cfi_amdstd_erase_chip;
 	}
 
 }
@@ -252,8 +252,8 @@ static void fixup_use_erase_chip(struct mtd_info *mtd)
  */
 static void fixup_use_atmel_lock(struct mtd_info *mtd)
 {
-	mtd->lock = cfi_atmel_lock;
-	mtd->unlock = cfi_atmel_unlock;
+	mtd->_lock = cfi_atmel_lock;
+	mtd->_unlock = cfi_atmel_unlock;
 	mtd->flags |= MTD_POWERUP_LOCK;
 }
 
@@ -317,7 +317,7 @@ static void fixup_s29gl064n_sectors(struct mtd_info *mtd)
 
 	if ((cfi->cfiq->EraseRegionInfo[0] & 0xffff) == 0x003f) {
 		cfi->cfiq->EraseRegionInfo[0] |= 0x0040;
-		pr_warning("%s: Bad S29GL064N CFI data, adjust from 64 to 128 sectors\n", mtd->name);
+		pr_warning("%s: Bad S29GL064N CFI data; adjust from 64 to 128 sectors\n", mtd->name);
 	}
 }
 
@@ -328,8 +328,21 @@ static void fixup_s29gl032n_sectors(struct mtd_info *mtd)
 
 	if ((cfi->cfiq->EraseRegionInfo[1] & 0xffff) == 0x007e) {
 		cfi->cfiq->EraseRegionInfo[1] &= ~0x0040;
-		pr_warning("%s: Bad S29GL032N CFI data, adjust from 127 to 63 sectors\n", mtd->name);
+		pr_warning("%s: Bad S29GL032N CFI data; adjust from 127 to 63 sectors\n", mtd->name);
 	}
+}
+
+static void fixup_s29ns512p_sectors(struct mtd_info *mtd)
+{
+	struct map_info *map = mtd->priv;
+	struct cfi_private *cfi = map->fldrv_priv;
+
+	/*
+	 *  S29NS512P flash uses more than 8bits to report number of sectors,
+	 * which is not permitted by CFI.
+	 */
+	cfi->cfiq->EraseRegionInfo[0] = 0x020001ff;
+	pr_warning("%s: Bad S29NS512P CFI data; adjust to 512 sectors\n", mtd->name);
 }
 
 /* Used to fix CFI-Tables of chips without Extended Query Tables */
@@ -362,6 +375,7 @@ static struct cfi_fixup cfi_fixup_table[] = {
 	{ CFI_MFR_AMD, 0x1301, fixup_s29gl064n_sectors },
 	{ CFI_MFR_AMD, 0x1a00, fixup_s29gl032n_sectors },
 	{ CFI_MFR_AMD, 0x1a01, fixup_s29gl032n_sectors },
+	{ CFI_MFR_AMD, 0x3f00, fixup_s29ns512p_sectors },
 	{ CFI_MFR_SST, 0x536a, fixup_sst38vf640x_sectorsize }, /* SST38VF6402 */
 	{ CFI_MFR_SST, 0x536b, fixup_sst38vf640x_sectorsize }, /* SST38VF6401 */
 	{ CFI_MFR_SST, 0x536c, fixup_sst38vf640x_sectorsize }, /* SST38VF6404 */
@@ -432,20 +446,21 @@ struct mtd_info *cfi_cmdset_0002(struct map_info *map, int primary)
 	mtd->type = MTD_NORFLASH;
 
 	/* Fill in the default mtd operations */
-	mtd->erase   = cfi_amdstd_erase_varsize;
-	mtd->write   = cfi_amdstd_write_words;
-	mtd->read    = cfi_amdstd_read;
-	mtd->sync    = cfi_amdstd_sync;
-	mtd->suspend = cfi_amdstd_suspend;
-	mtd->resume  = cfi_amdstd_resume;
+	mtd->_erase   = cfi_amdstd_erase_varsize;
+	mtd->_write   = cfi_amdstd_write_words;
+	mtd->_read    = cfi_amdstd_read;
+	mtd->_sync    = cfi_amdstd_sync;
+	mtd->_suspend = cfi_amdstd_suspend;
+	mtd->_resume  = cfi_amdstd_resume;
 	mtd->flags   = MTD_CAP_NORFLASH;
 	mtd->name    = map->name;
 	mtd->writesize = 1;
 	mtd->writebufsize = cfi_interleave(cfi) << cfi->cfiq->MaxBufWriteSize;
 
-	DEBUG(MTD_DEBUG_LEVEL3, "MTD %s(): write buffer size %d\n",
-		__func__, mtd->writebufsize);
+	pr_debug("MTD %s(): write buffer size %d\n", __func__,
+			mtd->writebufsize);
 
+	mtd->_panic_write = cfi_amdstd_panic_write;
 	mtd->reboot_notifier.notifier_call = cfi_amdstd_reboot;
 
 	if (cfi->cfi_mode==CFI_MODE_CFI){
@@ -462,13 +477,14 @@ struct mtd_info *cfi_cmdset_0002(struct map_info *map, int primary)
 			cfi_fixup_major_minor(cfi, extp);
 
 			/*
-			 * Valid primary extension versions are: 1.0, 1.1, 1.2, 1.3, 1.4
+			 * Valid primary extension versions are: 1.0, 1.1, 1.2, 1.3, 1.4, 1.5
 			 * see: http://cs.ozerki.net/zap/pub/axim-x5/docs/cfi_r20.pdf, page 19 
 			 *      http://www.spansion.com/Support/AppNotes/cfi_100_20011201.pdf
 			 *      http://www.spansion.com/Support/Datasheets/s29ws-p_00_a12_e.pdf
+			 *      http://www.spansion.com/Support/Datasheets/S29GL_128S_01GS_00_02_e.pdf
 			 */
 			if (extp->MajorVersion != '1' ||
-			    (extp->MajorVersion == '1' && (extp->MinorVersion < '0' || extp->MinorVersion > '4'))) {
+			    (extp->MajorVersion == '1' && (extp->MinorVersion < '0' || extp->MinorVersion > '5'))) {
 				printk(KERN_ERR "  Unknown Amd/Fujitsu Extended Query "
 				       "version %c.%c (%#02x/%#02x).\n",
 				       extp->MajorVersion, extp->MinorVersion,
@@ -710,9 +726,7 @@ static int get_chip(struct map_info *map, struct flchip *chip, unsigned long adr
 				 * there was an error (so leave the erase
 				 * routine to recover from it) or we trying to
 				 * use the erase-in-progress sector. */
-				map_write(map, cfi->sector_erase_cmd, chip->in_progress_block_addr);
-				chip->state = FL_ERASING;
-				chip->oldstate = FL_READY;
+				put_chip(map, chip, adr);
 				printk(KERN_ERR "MTD %s(): chip not ready after erase suspend\n", __func__);
 				return -EIO;
 			}
@@ -762,7 +776,6 @@ static void put_chip(struct map_info *map, struct flchip *chip, unsigned long ad
 
 	switch(chip->oldstate) {
 	case FL_ERASING:
-		chip->state = chip->oldstate;
 		map_write(map, cfi->sector_erase_cmd, chip->in_progress_block_addr);
 		chip->oldstate = FL_READY;
 		chip->state = FL_ERASING;
@@ -775,8 +788,6 @@ static void put_chip(struct map_info *map, struct flchip *chip, unsigned long ad
 
 	case FL_READY:
 	case FL_STATUS:
-		/* We should really make set_vpp() count, rather than doing this */
-		DISABLE_VPP(map);
 		break;
 	default:
 		printk(KERN_ERR "MTD: put_chip() called with oldstate %d!!\n", chip->oldstate);
@@ -1018,12 +1029,8 @@ static int cfi_amdstd_read (struct mtd_info *mtd, loff_t from, size_t len, size_
 	int ret = 0;
 
 	/* ofs: offset within the first chip that the first read should start */
-
 	chipnum = (from >> cfi->chipshift);
 	ofs = from - (chipnum <<  cfi->chipshift);
-
-
-	*retlen = 0;
 
 	while (len) {
 		unsigned long thislen;
@@ -1102,15 +1109,10 @@ static int cfi_amdstd_secsi_read (struct mtd_info *mtd, loff_t from, size_t len,
 	int chipnum;
 	int ret = 0;
 
-
 	/* ofs: offset within the first chip that the first read should start */
-
 	/* 8 secsi bytes per chip */
 	chipnum=from>>3;
 	ofs=from & 7;
-
-
-	*retlen = 0;
 
 	while (len) {
 		unsigned long thislen;
@@ -1165,7 +1167,7 @@ static int __xipram do_write_oneword(struct map_info *map, struct flchip *chip, 
 		return ret;
 	}
 
-	DEBUG( MTD_DEBUG_LEVEL3, "MTD %s(): WRITE 0x%.8lx(0x%.8lx)\n",
+	pr_debug("MTD %s(): WRITE 0x%.8lx(0x%.8lx)\n",
 	       __func__, adr, datum.x[0] );
 
 	/*
@@ -1176,7 +1178,7 @@ static int __xipram do_write_oneword(struct map_info *map, struct flchip *chip, 
 	 */
 	oldd = map_read(map, adr);
 	if (map_word_equal(map, oldd, datum)) {
-		DEBUG( MTD_DEBUG_LEVEL3, "MTD %s(): NOP\n",
+		pr_debug("MTD %s(): NOP\n",
 		       __func__);
 		goto op_done;
 	}
@@ -1239,6 +1241,7 @@ static int __xipram do_write_oneword(struct map_info *map, struct flchip *chip, 
 	xip_enable(map, chip, adr);
  op_done:
 	chip->state = FL_READY;
+	DISABLE_VPP(map);
 	put_chip(map, chip, adr);
 	mutex_unlock(&chip->mutex);
 
@@ -1255,10 +1258,6 @@ static int cfi_amdstd_write_words(struct mtd_info *mtd, loff_t to, size_t len,
 	int chipnum;
 	unsigned long ofs, chipstart;
 	DECLARE_WAITQUEUE(wait, current);
-
-	*retlen = 0;
-	if (!len)
-		return 0;
 
 	chipnum = to >> cfi->chipshift;
 	ofs = to  - (chipnum << cfi->chipshift);
@@ -1402,7 +1401,7 @@ static int __xipram do_write_buffer(struct map_info *map, struct flchip *chip,
 
 	datum = map_word_load(map, buf);
 
-	DEBUG( MTD_DEBUG_LEVEL3, "MTD %s(): WRITE 0x%.8lx(0x%.8lx)\n",
+	pr_debug("MTD %s(): WRITE 0x%.8lx(0x%.8lx)\n",
 	       __func__, adr, datum.x[0] );
 
 	XIP_INVAL_CACHED_RANGE(map, adr, len);
@@ -1481,6 +1480,7 @@ static int __xipram do_write_buffer(struct map_info *map, struct flchip *chip,
 	ret = -EIO;
  op_done:
 	chip->state = FL_READY;
+	DISABLE_VPP(map);
 	put_chip(map, chip, adr);
 	mutex_unlock(&chip->mutex);
 
@@ -1497,10 +1497,6 @@ static int cfi_amdstd_write_buffers(struct mtd_info *mtd, loff_t to, size_t len,
 	int ret = 0;
 	int chipnum;
 	unsigned long ofs;
-
-	*retlen = 0;
-	if (!len)
-		return 0;
 
 	chipnum = to >> cfi->chipshift;
 	ofs = to  - (chipnum << cfi->chipshift);
@@ -1567,6 +1563,238 @@ static int cfi_amdstd_write_buffers(struct mtd_info *mtd, loff_t to, size_t len,
 	return 0;
 }
 
+/*
+ * Wait for the flash chip to become ready to write data
+ *
+ * This is only called during the panic_write() path. When panic_write()
+ * is called, the kernel is in the process of a panic, and will soon be
+ * dead. Therefore we don't take any locks, and attempt to get access
+ * to the chip as soon as possible.
+ */
+static int cfi_amdstd_panic_wait(struct map_info *map, struct flchip *chip,
+				 unsigned long adr)
+{
+	struct cfi_private *cfi = map->fldrv_priv;
+	int retries = 10;
+	int i;
+
+	/*
+	 * If the driver thinks the chip is idle, and no toggle bits
+	 * are changing, then the chip is actually idle for sure.
+	 */
+	if (chip->state == FL_READY && chip_ready(map, adr))
+		return 0;
+
+	/*
+	 * Try several times to reset the chip and then wait for it
+	 * to become idle. The upper limit of a few milliseconds of
+	 * delay isn't a big problem: the kernel is dying anyway. It
+	 * is more important to save the messages.
+	 */
+	while (retries > 0) {
+		const unsigned long timeo = (HZ / 1000) + 1;
+
+		/* send the reset command */
+		map_write(map, CMD(0xF0), chip->start);
+
+		/* wait for the chip to become ready */
+		for (i = 0; i < jiffies_to_usecs(timeo); i++) {
+			if (chip_ready(map, adr))
+				return 0;
+
+			udelay(1);
+		}
+	}
+
+	/* the chip never became ready */
+	return -EBUSY;
+}
+
+/*
+ * Write out one word of data to a single flash chip during a kernel panic
+ *
+ * This is only called during the panic_write() path. When panic_write()
+ * is called, the kernel is in the process of a panic, and will soon be
+ * dead. Therefore we don't take any locks, and attempt to get access
+ * to the chip as soon as possible.
+ *
+ * The implementation of this routine is intentionally similar to
+ * do_write_oneword(), in order to ease code maintenance.
+ */
+static int do_panic_write_oneword(struct map_info *map, struct flchip *chip,
+				  unsigned long adr, map_word datum)
+{
+	const unsigned long uWriteTimeout = (HZ / 1000) + 1;
+	struct cfi_private *cfi = map->fldrv_priv;
+	int retry_cnt = 0;
+	map_word oldd;
+	int ret = 0;
+	int i;
+
+	adr += chip->start;
+
+	ret = cfi_amdstd_panic_wait(map, chip, adr);
+	if (ret)
+		return ret;
+
+	pr_debug("MTD %s(): PANIC WRITE 0x%.8lx(0x%.8lx)\n",
+			__func__, adr, datum.x[0]);
+
+	/*
+	 * Check for a NOP for the case when the datum to write is already
+	 * present - it saves time and works around buggy chips that corrupt
+	 * data at other locations when 0xff is written to a location that
+	 * already contains 0xff.
+	 */
+	oldd = map_read(map, adr);
+	if (map_word_equal(map, oldd, datum)) {
+		pr_debug("MTD %s(): NOP\n", __func__);
+		goto op_done;
+	}
+
+	ENABLE_VPP(map);
+
+retry:
+	cfi_send_gen_cmd(0xAA, cfi->addr_unlock1, chip->start, map, cfi, cfi->device_type, NULL);
+	cfi_send_gen_cmd(0x55, cfi->addr_unlock2, chip->start, map, cfi, cfi->device_type, NULL);
+	cfi_send_gen_cmd(0xA0, cfi->addr_unlock1, chip->start, map, cfi, cfi->device_type, NULL);
+	map_write(map, datum, adr);
+
+	for (i = 0; i < jiffies_to_usecs(uWriteTimeout); i++) {
+		if (chip_ready(map, adr))
+			break;
+
+		udelay(1);
+	}
+
+	if (!chip_good(map, adr, datum)) {
+		/* reset on all failures. */
+		map_write(map, CMD(0xF0), chip->start);
+		/* FIXME - should have reset delay before continuing */
+
+		if (++retry_cnt <= MAX_WORD_RETRIES)
+			goto retry;
+
+		ret = -EIO;
+	}
+
+op_done:
+	DISABLE_VPP(map);
+	return ret;
+}
+
+/*
+ * Write out some data during a kernel panic
+ *
+ * This is used by the mtdoops driver to save the dying messages from a
+ * kernel which has panic'd.
+ *
+ * This routine ignores all of the locking used throughout the rest of the
+ * driver, in order to ensure that the data gets written out no matter what
+ * state this driver (and the flash chip itself) was in when the kernel crashed.
+ *
+ * The implementation of this routine is intentionally similar to
+ * cfi_amdstd_write_words(), in order to ease code maintenance.
+ */
+static int cfi_amdstd_panic_write(struct mtd_info *mtd, loff_t to, size_t len,
+				  size_t *retlen, const u_char *buf)
+{
+	struct map_info *map = mtd->priv;
+	struct cfi_private *cfi = map->fldrv_priv;
+	unsigned long ofs, chipstart;
+	int ret = 0;
+	int chipnum;
+
+	chipnum = to >> cfi->chipshift;
+	ofs = to - (chipnum << cfi->chipshift);
+	chipstart = cfi->chips[chipnum].start;
+
+	/* If it's not bus aligned, do the first byte write */
+	if (ofs & (map_bankwidth(map) - 1)) {
+		unsigned long bus_ofs = ofs & ~(map_bankwidth(map) - 1);
+		int i = ofs - bus_ofs;
+		int n = 0;
+		map_word tmp_buf;
+
+		ret = cfi_amdstd_panic_wait(map, &cfi->chips[chipnum], bus_ofs);
+		if (ret)
+			return ret;
+
+		/* Load 'tmp_buf' with old contents of flash */
+		tmp_buf = map_read(map, bus_ofs + chipstart);
+
+		/* Number of bytes to copy from buffer */
+		n = min_t(int, len, map_bankwidth(map) - i);
+
+		tmp_buf = map_word_load_partial(map, tmp_buf, buf, i, n);
+
+		ret = do_panic_write_oneword(map, &cfi->chips[chipnum],
+					     bus_ofs, tmp_buf);
+		if (ret)
+			return ret;
+
+		ofs += n;
+		buf += n;
+		(*retlen) += n;
+		len -= n;
+
+		if (ofs >> cfi->chipshift) {
+			chipnum++;
+			ofs = 0;
+			if (chipnum == cfi->numchips)
+				return 0;
+		}
+	}
+
+	/* We are now aligned, write as much as possible */
+	while (len >= map_bankwidth(map)) {
+		map_word datum;
+
+		datum = map_word_load(map, buf);
+
+		ret = do_panic_write_oneword(map, &cfi->chips[chipnum],
+					     ofs, datum);
+		if (ret)
+			return ret;
+
+		ofs += map_bankwidth(map);
+		buf += map_bankwidth(map);
+		(*retlen) += map_bankwidth(map);
+		len -= map_bankwidth(map);
+
+		if (ofs >> cfi->chipshift) {
+			chipnum++;
+			ofs = 0;
+			if (chipnum == cfi->numchips)
+				return 0;
+
+			chipstart = cfi->chips[chipnum].start;
+		}
+	}
+
+	/* Write the trailing bytes if any */
+	if (len & (map_bankwidth(map) - 1)) {
+		map_word tmp_buf;
+
+		ret = cfi_amdstd_panic_wait(map, &cfi->chips[chipnum], ofs);
+		if (ret)
+			return ret;
+
+		tmp_buf = map_read(map, ofs + chipstart);
+
+		tmp_buf = map_word_load_partial(map, tmp_buf, buf, 0, len);
+
+		ret = do_panic_write_oneword(map, &cfi->chips[chipnum],
+					     ofs, tmp_buf);
+		if (ret)
+			return ret;
+
+		(*retlen) += len;
+	}
+
+	return 0;
+}
+
 
 /*
  * Handle devices with one erase region, that only implement
@@ -1589,7 +1817,7 @@ static int __xipram do_erase_chip(struct map_info *map, struct flchip *chip)
 		return ret;
 	}
 
-	DEBUG( MTD_DEBUG_LEVEL3, "MTD %s(): ERASE 0x%.8lx\n",
+	pr_debug("MTD %s(): ERASE 0x%.8lx\n",
 	       __func__, chip->start );
 
 	XIP_INVAL_CACHED_RANGE(map, adr, map->size);
@@ -1654,6 +1882,7 @@ static int __xipram do_erase_chip(struct map_info *map, struct flchip *chip)
 
 	chip->state = FL_READY;
 	xip_enable(map, chip, adr);
+	DISABLE_VPP(map);
 	put_chip(map, chip, adr);
 	mutex_unlock(&chip->mutex);
 
@@ -1677,7 +1906,7 @@ static int __xipram do_erase_oneblock(struct map_info *map, struct flchip *chip,
 		return ret;
 	}
 
-	DEBUG( MTD_DEBUG_LEVEL3, "MTD %s(): ERASE 0x%.8lx\n",
+	pr_debug("MTD %s(): ERASE 0x%.8lx\n",
 	       __func__, adr );
 
 	XIP_INVAL_CACHED_RANGE(map, adr, len);
@@ -1744,6 +1973,7 @@ static int __xipram do_erase_oneblock(struct map_info *map, struct flchip *chip,
 	}
 
 	chip->state = FL_READY;
+	DISABLE_VPP(map);
 	put_chip(map, chip, adr);
 	mutex_unlock(&chip->mutex);
 	return ret;
@@ -1803,8 +2033,7 @@ static int do_atmel_lock(struct map_info *map, struct flchip *chip,
 		goto out_unlock;
 	chip->state = FL_LOCKING;
 
-	DEBUG(MTD_DEBUG_LEVEL3, "MTD %s(): LOCK 0x%08lx len %d\n",
-	      __func__, adr, len);
+	pr_debug("MTD %s(): LOCK 0x%08lx len %d\n", __func__, adr, len);
 
 	cfi_send_gen_cmd(0xAA, cfi->addr_unlock1, chip->start, map, cfi,
 			 cfi->device_type, NULL);
@@ -1839,8 +2068,7 @@ static int do_atmel_unlock(struct map_info *map, struct flchip *chip,
 		goto out_unlock;
 	chip->state = FL_UNLOCKING;
 
-	DEBUG(MTD_DEBUG_LEVEL3, "MTD %s(): LOCK 0x%08lx len %d\n",
-	      __func__, adr, len);
+	pr_debug("MTD %s(): LOCK 0x%08lx len %d\n", __func__, adr, len);
 
 	cfi_send_gen_cmd(0xAA, cfi->addr_unlock1, chip->start, map, cfi,
 			 cfi->device_type, NULL);

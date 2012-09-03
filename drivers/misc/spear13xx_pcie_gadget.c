@@ -787,8 +787,8 @@ static int __devinit spear_pcie_gadget_probe(struct platform_device *pdev)
 
 	status = request_irq(irq, spear_pcie_gadget_irq, 0, pdev->name, NULL);
 	if (status) {
-		dev_err(&pdev->dev, "pcie gadget interrupt IRQ%d already \
-				claimed\n", irq);
+		dev_err(&pdev->dev,
+			"pcie gadget interrupt IRQ%d already claimed\n", irq);
 		goto err_iounmap;
 	}
 
@@ -845,7 +845,7 @@ err_iounmap:
 err_iounmap_app:
 	iounmap(config->va_app_base);
 err_kzalloc:
-	kfree(config);
+	kfree(target);
 err_rel_res:
 	release_mem_region(res1->start, resource_size(res1));
 err_rel_res0:
@@ -891,18 +891,8 @@ static struct platform_driver spear_pcie_gadget_driver = {
 	},
 };
 
-static int __init spear_pcie_gadget_init(void)
-{
-	return platform_driver_register(&spear_pcie_gadget_driver);
-}
-module_init(spear_pcie_gadget_init);
+module_platform_driver(spear_pcie_gadget_driver);
 
-static void __exit spear_pcie_gadget_exit(void)
-{
-	platform_driver_unregister(&spear_pcie_gadget_driver);
-}
-module_exit(spear_pcie_gadget_exit);
-
-MODULE_ALIAS("pcie-gadget-spear");
+MODULE_ALIAS("platform:pcie-gadget-spear");
 MODULE_AUTHOR("Pratyush Anand");
 MODULE_LICENSE("GPL");

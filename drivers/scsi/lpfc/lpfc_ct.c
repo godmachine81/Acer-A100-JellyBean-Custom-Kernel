@@ -352,6 +352,8 @@ lpfc_gen_req(struct lpfc_vport *vport, struct lpfc_dmabuf *bmp,
 	icmd->ulpLe = 1;
 	icmd->ulpClass = CLASS3;
 	icmd->ulpContext = ndlp->nlp_rpi;
+	if (phba->sli_rev == LPFC_SLI_REV4)
+		icmd->ulpContext = phba->sli4_hba.rpi_ids[ndlp->nlp_rpi];
 
 	if (phba->sli3_options & LPFC_SLI3_NPIV_ENABLED) {
 		/* For GEN_REQUEST64_CR, use the RPI */
@@ -1074,7 +1076,7 @@ int
 lpfc_vport_symbolic_node_name(struct lpfc_vport *vport, char *symbol,
 	size_t size)
 {
-	char fwrev[16];
+	char fwrev[FW_REV_STR_SIZE];
 	int n;
 
 	lpfc_decode_firmware_rev(vport->phba, fwrev, 0);
@@ -1832,7 +1834,7 @@ lpfc_decode_firmware_rev(struct lpfc_hba *phba, char *fwrevision, int flag)
 	uint8_t *fwname;
 
 	if (phba->sli_rev == LPFC_SLI_REV4)
-		sprintf(fwrevision, "%s", vp->rev.opFwName);
+		snprintf(fwrevision, FW_REV_STR_SIZE, "%s", vp->rev.opFwName);
 	else if (vp->rev.rBit) {
 		if (psli->sli_flag & LPFC_SLI_ACTIVE)
 			rev = vp->rev.sli2FwRev;
@@ -1853,6 +1855,9 @@ lpfc_decode_firmware_rev(struct lpfc_hba *phba, char *fwrevision, int flag)
 			break;
 		case 2:
 			c = 'B';
+			break;
+		case 3:
+			c = 'X';
 			break;
 		default:
 			c = 0;

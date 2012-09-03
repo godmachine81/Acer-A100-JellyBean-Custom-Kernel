@@ -32,6 +32,25 @@ struct device platform_bus = {
 EXPORT_SYMBOL_GPL(platform_bus);
 
 /**
+ * arch_setup_pdev_archdata - Allow manipulation of archdata before its used
+ * @pdev: platform device
+ *
+ * This is called before platform_device_add() such that any pdev_archdata may
+ * be setup before the platform_notifier is called.  So if a user needs to
+ * manipulate any relevant information in the pdev_archdata they can do:
+ *
+ * 	platform_devic_alloc()
+ * 	... manipulate ...
+ * 	platform_device_add()
+ *
+ * And if they don't care they can just call platform_device_register() and
+ * everything will just work out.
+ */
+void __weak arch_setup_pdev_archdata(struct platform_device *pdev)
+{
+}
+
+/**
  * platform_get_resource - get a resource for a device
  * @dev: platform device
  * @type: resource type
@@ -173,6 +192,7 @@ struct platform_device *platform_device_alloc(const char *name, int id)
 		pa->pdev.id = id;
 		device_initialize(&pa->pdev.dev);
 		pa->pdev.dev.release = platform_device_release;
+		arch_setup_pdev_archdata(&pa->pdev);
 	}
 
 	return pa ? &pa->pdev : NULL;
@@ -192,18 +212,18 @@ EXPORT_SYMBOL_GPL(platform_device_alloc);
 int platform_device_add_resources(struct platform_device *pdev,
 				  const struct resource *res, unsigned int num)
 {
-	struct resource *r;
+	struct resource *r = NULL;
 
-	if (!res)
-		return 0;
-
-	r = kmemdup(res, sizeof(struct resource) * num, GFP_KERNEL);
-	if (r) {
-		pdev->resource = r;
-		pdev->num_resources = num;
-		return 0;
+	if (res) {
+		r = kmemdup(res, sizeof(struct resource) * num, GFP_KERNEL);
+		if (!r)
+			return -ENOMEM;
 	}
-	return -ENOMEM;
+
+	kfree(pdev->resource);
+	pdev->resource = r;
+	pdev->num_resources = num;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(platform_device_add_resources);
 
@@ -220,17 +240,17 @@ EXPORT_SYMBOL_GPL(platform_device_add_resources);
 int platform_device_add_data(struct platform_device *pdev, const void *data,
 			     size_t size)
 {
-	void *d;
+	void *d = NULL;
 
-	if (!data)
-		return 0;
-
-	d = kmemdup(data, size, GFP_KERNEL);
-	if (d) {
-		pdev->dev.platform_data = d;
-		return 0;
+	if (data) {
+		d = kmemdup(data, size, GFP_KERNEL);
+		if (!d)
+			return -ENOMEM;
 	}
-	return -ENOMEM;
+
+	kfree(pdev->dev.platform_data);
+	pdev->dev.platform_data = d;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(platform_device_add_data);
 
@@ -334,6 +354,7 @@ EXPORT_SYMBOL_GPL(platform_device_del);
 int platform_device_register(struct platform_device *pdev)
 {
 	device_initialize(&pdev->dev);
+	arch_setup_pdev_archdata(pdev);
 	return platform_device_add(pdev);
 }
 EXPORT_SYMBOL_GPL(platform_device_register);
@@ -354,52 +375,64 @@ void platform_device_unregister(struct platform_device *pdev)
 EXPORT_SYMBOL_GPL(platform_device_unregister);
 
 /**
- * platform_device_register_resndata - add a platform-level device with
+ * platform_device_register_full - add a platform-level device with
  * resources and platform-specific data
  *
- * @parent: parent device for the device we're adding
- * @name: base name of the device we're adding
- * @id: instance id
- * @res: set of resources that needs to be allocated for the device
- * @num: number of resources
- * @data: platform specific data for this platform device
- * @size: size of platform specific data
+ * @pdevinfo: data used to create device
  *
  * Returns &struct platform_device pointer on success, or ERR_PTR() on error.
  */
-struct platform_device *platform_device_register_resndata(
-		struct device *parent,
-		const char *name, int id,
-		const struct resource *res, unsigned int num,
-		const void *data, size_t size)
+struct platform_device *platform_device_register_full(
+		const struct platform_device_info *pdevinfo)
 {
 	int ret = -ENOMEM;
 	struct platform_device *pdev;
 
-	pdev = platform_device_alloc(name, id);
+	pdev = platform_device_alloc(pdevinfo->name, pdevinfo->id);
 	if (!pdev)
-		goto err;
+		goto err_alloc;
 
-	pdev->dev.parent = parent;
+	pdev->dev.parent = pdevinfo->parent;
 
-	ret = platform_device_add_resources(pdev, res, num);
+	if (pdevinfo->dma_mask) {
+		/*
+		 * This memory isn't freed when the device is put,
+		 * I don't have a nice idea for that though.  Conceptually
+		 * dma_mask in struct device should not be a pointer.
+		 * See http://thread.gmane.org/gmane.linux.kernel.pci/9081
+		 */
+		pdev->dev.dma_mask =
+			kmalloc(sizeof(*pdev->dev.dma_mask), GFP_KERNEL);
+		if (!pdev->dev.dma_mask)
+			goto err;
+
+		*pdev->dev.dma_mask = pdevinfo->dma_mask;
+		pdev->dev.coherent_dma_mask = pdevinfo->dma_mask;
+	}
+
+	ret = platform_device_add_resources(pdev,
+			pdevinfo->res, pdevinfo->num_res);
 	if (ret)
 		goto err;
 
-	ret = platform_device_add_data(pdev, data, size);
+	ret = platform_device_add_data(pdev,
+			pdevinfo->data, pdevinfo->size_data);
 	if (ret)
 		goto err;
 
 	ret = platform_device_add(pdev);
 	if (ret) {
 err:
+		kfree(pdev->dev.dma_mask);
+
+err_alloc:
 		platform_device_put(pdev);
 		return ERR_PTR(ret);
 	}
 
 	return pdev;
 }
-EXPORT_SYMBOL_GPL(platform_device_register_resndata);
+EXPORT_SYMBOL_GPL(platform_device_register_full);
 
 static int platform_drv_probe(struct device *_dev)
 {
@@ -588,12 +621,12 @@ static int platform_uevent(struct device *dev, struct kobj_uevent_env *env)
 	int rc;
 
 	/* Some devices have extra OF data and an OF-style MODALIAS */
-	rc = of_device_uevent(dev,env);
+	rc = of_device_uevent_modalias(dev,env);
 	if (rc != -ENODEV)
 		return rc;
 
 	add_uevent_var(env, "MODALIAS=%s%s", PLATFORM_MODULE_PREFIX,
-		(pdev->id_entry) ? pdev->id_entry->name : pdev->name);
+			pdev->name);
 	return 0;
 }
 
@@ -667,35 +700,11 @@ static int platform_legacy_resume(struct device *dev)
 	return ret;
 }
 
-static int platform_pm_prepare(struct device *dev)
-{
-	struct device_driver *drv = dev->driver;
-	int ret = 0;
-
-	if (drv && drv->pm && drv->pm->prepare)
-		ret = drv->pm->prepare(dev);
-
-	return ret;
-}
-
-static void platform_pm_complete(struct device *dev)
-{
-	struct device_driver *drv = dev->driver;
-
-	if (drv && drv->pm && drv->pm->complete)
-		drv->pm->complete(dev);
-}
-
-#else /* !CONFIG_PM_SLEEP */
-
-#define platform_pm_prepare		NULL
-#define platform_pm_complete		NULL
-
-#endif /* !CONFIG_PM_SLEEP */
+#endif /* CONFIG_PM_SLEEP */
 
 #ifdef CONFIG_SUSPEND
 
-int __weak platform_pm_suspend(struct device *dev)
+int platform_pm_suspend(struct device *dev)
 {
 	struct device_driver *drv = dev->driver;
 	int ret = 0;
@@ -713,23 +722,7 @@ int __weak platform_pm_suspend(struct device *dev)
 	return ret;
 }
 
-int __weak platform_pm_suspend_noirq(struct device *dev)
-{
-	struct device_driver *drv = dev->driver;
-	int ret = 0;
-
-	if (!drv)
-		return 0;
-
-	if (drv->pm) {
-		if (drv->pm->suspend_noirq)
-			ret = drv->pm->suspend_noirq(dev);
-	}
-
-	return ret;
-}
-
-int __weak platform_pm_resume(struct device *dev)
+int platform_pm_resume(struct device *dev)
 {
 	struct device_driver *drv = dev->driver;
 	int ret = 0;
@@ -747,34 +740,11 @@ int __weak platform_pm_resume(struct device *dev)
 	return ret;
 }
 
-int __weak platform_pm_resume_noirq(struct device *dev)
-{
-	struct device_driver *drv = dev->driver;
-	int ret = 0;
-
-	if (!drv)
-		return 0;
-
-	if (drv->pm) {
-		if (drv->pm->resume_noirq)
-			ret = drv->pm->resume_noirq(dev);
-	}
-
-	return ret;
-}
-
-#else /* !CONFIG_SUSPEND */
-
-#define platform_pm_suspend		NULL
-#define platform_pm_resume		NULL
-#define platform_pm_suspend_noirq	NULL
-#define platform_pm_resume_noirq	NULL
-
-#endif /* !CONFIG_SUSPEND */
+#endif /* CONFIG_SUSPEND */
 
 #ifdef CONFIG_HIBERNATE_CALLBACKS
 
-static int platform_pm_freeze(struct device *dev)
+int platform_pm_freeze(struct device *dev)
 {
 	struct device_driver *drv = dev->driver;
 	int ret = 0;
@@ -792,23 +762,7 @@ static int platform_pm_freeze(struct device *dev)
 	return ret;
 }
 
-static int platform_pm_freeze_noirq(struct device *dev)
-{
-	struct device_driver *drv = dev->driver;
-	int ret = 0;
-
-	if (!drv)
-		return 0;
-
-	if (drv->pm) {
-		if (drv->pm->freeze_noirq)
-			ret = drv->pm->freeze_noirq(dev);
-	}
-
-	return ret;
-}
-
-static int platform_pm_thaw(struct device *dev)
+int platform_pm_thaw(struct device *dev)
 {
 	struct device_driver *drv = dev->driver;
 	int ret = 0;
@@ -826,23 +780,7 @@ static int platform_pm_thaw(struct device *dev)
 	return ret;
 }
 
-static int platform_pm_thaw_noirq(struct device *dev)
-{
-	struct device_driver *drv = dev->driver;
-	int ret = 0;
-
-	if (!drv)
-		return 0;
-
-	if (drv->pm) {
-		if (drv->pm->thaw_noirq)
-			ret = drv->pm->thaw_noirq(dev);
-	}
-
-	return ret;
-}
-
-static int platform_pm_poweroff(struct device *dev)
+int platform_pm_poweroff(struct device *dev)
 {
 	struct device_driver *drv = dev->driver;
 	int ret = 0;
@@ -860,23 +798,7 @@ static int platform_pm_poweroff(struct device *dev)
 	return ret;
 }
 
-static int platform_pm_poweroff_noirq(struct device *dev)
-{
-	struct device_driver *drv = dev->driver;
-	int ret = 0;
-
-	if (!drv)
-		return 0;
-
-	if (drv->pm) {
-		if (drv->pm->poweroff_noirq)
-			ret = drv->pm->poweroff_noirq(dev);
-	}
-
-	return ret;
-}
-
-static int platform_pm_restore(struct device *dev)
+int platform_pm_restore(struct device *dev)
 {
 	struct device_driver *drv = dev->driver;
 	int ret = 0;
@@ -894,78 +816,13 @@ static int platform_pm_restore(struct device *dev)
 	return ret;
 }
 
-static int platform_pm_restore_noirq(struct device *dev)
-{
-	struct device_driver *drv = dev->driver;
-	int ret = 0;
-
-	if (!drv)
-		return 0;
-
-	if (drv->pm) {
-		if (drv->pm->restore_noirq)
-			ret = drv->pm->restore_noirq(dev);
-	}
-
-	return ret;
-}
-
-#else /* !CONFIG_HIBERNATE_CALLBACKS */
-
-#define platform_pm_freeze		NULL
-#define platform_pm_thaw		NULL
-#define platform_pm_poweroff		NULL
-#define platform_pm_restore		NULL
-#define platform_pm_freeze_noirq	NULL
-#define platform_pm_thaw_noirq		NULL
-#define platform_pm_poweroff_noirq	NULL
-#define platform_pm_restore_noirq	NULL
-
-#endif /* !CONFIG_HIBERNATE_CALLBACKS */
-
-#ifdef CONFIG_PM_RUNTIME
-
-int __weak platform_pm_runtime_suspend(struct device *dev)
-{
-	return pm_generic_runtime_suspend(dev);
-};
-
-int __weak platform_pm_runtime_resume(struct device *dev)
-{
-	return pm_generic_runtime_resume(dev);
-};
-
-int __weak platform_pm_runtime_idle(struct device *dev)
-{
-	return pm_generic_runtime_idle(dev);
-};
-
-#else /* !CONFIG_PM_RUNTIME */
-
-#define platform_pm_runtime_suspend NULL
-#define platform_pm_runtime_resume NULL
-#define platform_pm_runtime_idle NULL
-
-#endif /* !CONFIG_PM_RUNTIME */
+#endif /* CONFIG_HIBERNATE_CALLBACKS */
 
 static const struct dev_pm_ops platform_dev_pm_ops = {
-	.prepare = platform_pm_prepare,
-	.complete = platform_pm_complete,
-	.suspend = platform_pm_suspend,
-	.resume = platform_pm_resume,
-	.freeze = platform_pm_freeze,
-	.thaw = platform_pm_thaw,
-	.poweroff = platform_pm_poweroff,
-	.restore = platform_pm_restore,
-	.suspend_noirq = platform_pm_suspend_noirq,
-	.resume_noirq = platform_pm_resume_noirq,
-	.freeze_noirq = platform_pm_freeze_noirq,
-	.thaw_noirq = platform_pm_thaw_noirq,
-	.poweroff_noirq = platform_pm_poweroff_noirq,
-	.restore_noirq = platform_pm_restore_noirq,
-	.runtime_suspend = platform_pm_runtime_suspend,
-	.runtime_resume = platform_pm_runtime_resume,
-	.runtime_idle = platform_pm_runtime_idle,
+	.runtime_suspend = pm_generic_runtime_suspend,
+	.runtime_resume = pm_generic_runtime_resume,
+	.runtime_idle = pm_generic_runtime_idle,
+	USE_PLATFORM_PM_SLEEP_OPS
 };
 
 struct bus_type platform_bus_type = {
@@ -976,41 +833,6 @@ struct bus_type platform_bus_type = {
 	.pm		= &platform_dev_pm_ops,
 };
 EXPORT_SYMBOL_GPL(platform_bus_type);
-
-/**
- * platform_bus_get_pm_ops() - return pointer to busses dev_pm_ops
- *
- * This function can be used by platform code to get the current
- * set of dev_pm_ops functions used by the platform_bus_type.
- */
-const struct dev_pm_ops * __init platform_bus_get_pm_ops(void)
-{
-	return platform_bus_type.pm;
-}
-
-/**
- * platform_bus_set_pm_ops() - update dev_pm_ops for the platform_bus_type
- *
- * @pm: pointer to new dev_pm_ops struct to be used for platform_bus_type
- *
- * Platform code can override the dev_pm_ops methods of
- * platform_bus_type by using this function.  It is expected that
- * platform code will first do a platform_bus_get_pm_ops(), then
- * kmemdup it, then customize selected methods and pass a pointer to
- * the new struct dev_pm_ops to this function.
- *
- * Since platform-specific code is customizing methods for *all*
- * devices (not just platform-specific devices) it is expected that
- * any custom overrides of these functions will keep existing behavior
- * and simply extend it.  For example, any customization of the
- * runtime PM methods should continue to call the pm_generic_*
- * functions as the default ones do in addition to the
- * platform-specific behavior.
- */
-void __init platform_bus_set_pm_ops(const struct dev_pm_ops *pm)
-{
-	platform_bus_type.pm = pm;
-}
 
 int __init platform_bus_init(void)
 {

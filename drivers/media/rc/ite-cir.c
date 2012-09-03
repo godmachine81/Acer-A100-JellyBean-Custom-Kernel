@@ -42,7 +42,6 @@
 #include <linux/bitops.h>
 #include <media/rc-core.h>
 #include <linux/pci_ids.h>
-#include <linux/delay.h>
 
 #include "ite-cir.h"
 
@@ -383,7 +382,7 @@ static int ite_set_tx_duty_cycle(struct rc_dev *rcdev, u32 duty_cycle)
 /* transmit out IR pulses; what you get here is a batch of alternating
  * pulse/space/pulse/space lengths that we should write out completely through
  * the FIFO, blocking on a full FIFO */
-static int ite_tx_ir(struct rc_dev *rcdev, int *txbuf, u32 n)
+static int ite_tx_ir(struct rc_dev *rcdev, unsigned *txbuf, unsigned n)
 {
 	unsigned long flags;
 	struct ite_dev *dev = rcdev->priv;
@@ -398,9 +397,6 @@ static int ite_tx_ir(struct rc_dev *rcdev, int *txbuf, u32 n)
 
 	/* clear the array just in case */
 	memset(last_sent, 0, ARRAY_SIZE(last_sent));
-
-	/* n comes in bytes; convert to ints */
-	n /= sizeof(int);
 
 	spin_lock_irqsave(&dev->lock, flags);
 
@@ -1250,11 +1246,9 @@ static void it8709_disable(struct ite_dev *dev)
 	ite_dbg("%s called", __func__);
 
 	/* clear out all interrupt enable flags */
-	it8709_wr(dev,
-			    it8709_rr(dev,
-				      IT85_C0IER) & ~(IT85_IEC | IT85_RFOIE |
-						      IT85_RDAIE |
-						      IT85_TLDLIE), IT85_C0IER);
+	it8709_wr(dev, it8709_rr(dev, IT85_C0IER) &
+			~(IT85_IEC | IT85_RFOIE | IT85_RDAIE | IT85_TLDLIE),
+		  IT85_C0IER);
 
 	/* disable the receiver */
 	it8709_disable_rx(dev);
@@ -1270,11 +1264,9 @@ static void it8709_init_hardware(struct ite_dev *dev)
 	ite_dbg("%s called", __func__);
 
 	/* disable all the interrupts */
-	it8709_wr(dev,
-			    it8709_rr(dev,
-				      IT85_C0IER) & ~(IT85_IEC | IT85_RFOIE |
-						      IT85_RDAIE |
-						      IT85_TLDLIE), IT85_C0IER);
+	it8709_wr(dev, it8709_rr(dev, IT85_C0IER) &
+			~(IT85_IEC | IT85_RFOIE | IT85_RDAIE | IT85_TLDLIE),
+		  IT85_C0IER);
 
 	/* program the baud rate divisor */
 	it8709_wr(dev, ITE_BAUDRATE_DIVISOR & 0xff, IT85_C0BDLR);
@@ -1282,28 +1274,22 @@ static void it8709_init_hardware(struct ite_dev *dev)
 			IT85_C0BDHR);
 
 	/* program the C0MSTCR register defaults */
-	it8709_wr(dev, (it8709_rr(dev, IT85_C0MSTCR) & ~(IT85_ILSEL |
-								   IT85_ILE
-								   | IT85_FIFOTL
-								   |
-								   IT85_FIFOCLR
-								   |
-								   IT85_RESET))
-			    | IT85_FIFOTL_DEFAULT, IT85_C0MSTCR);
+	it8709_wr(dev, (it8709_rr(dev, IT85_C0MSTCR) &
+			~(IT85_ILSEL | IT85_ILE | IT85_FIFOTL
+			  | IT85_FIFOCLR | IT85_RESET)) | IT85_FIFOTL_DEFAULT,
+		  IT85_C0MSTCR);
 
 	/* program the C0RCR register defaults */
-	it8709_wr(dev,
-			    (it8709_rr(dev, IT85_C0RCR) &
-			     ~(IT85_RXEN | IT85_RDWOS | IT85_RXEND
-			       | IT85_RXACT | IT85_RXDCR)) |
-			    ITE_RXDCR_DEFAULT, IT85_C0RCR);
+	it8709_wr(dev, (it8709_rr(dev, IT85_C0RCR) &
+			~(IT85_RXEN | IT85_RDWOS | IT85_RXEND | IT85_RXACT
+			  | IT85_RXDCR)) | ITE_RXDCR_DEFAULT,
+		  IT85_C0RCR);
 
 	/* program the C0TCR register defaults */
-	it8709_wr(dev, (it8709_rr(dev, IT85_C0TCR)
-				  &~(IT85_TXMPM | IT85_TXMPW))
-			    |IT85_TXRLE | IT85_TXENDF |
-			    IT85_TXMPM_DEFAULT |
-			    IT85_TXMPW_DEFAULT, IT85_C0TCR);
+	it8709_wr(dev, (it8709_rr(dev, IT85_C0TCR) & ~(IT85_TXMPM | IT85_TXMPW))
+			| IT85_TXRLE | IT85_TXENDF | IT85_TXMPM_DEFAULT
+			| IT85_TXMPW_DEFAULT,
+		  IT85_C0TCR);
 
 	/* program the carrier parameters */
 	ite_set_carrier_params(dev);
@@ -1529,16 +1515,6 @@ static int ite_probe(struct pnp_dev *pdev, const struct pnp_device_id
 	/* initialize raw event */
 	init_ir_raw_event(&itdev->rawir);
 
-	ret = -EBUSY;
-	/* now claim resources */
-	if (!request_region(itdev->cir_addr,
-				dev_desc->io_region_size, ITE_DRIVER_NAME))
-		goto failure;
-
-	if (request_irq(itdev->cir_irq, ite_cir_isr, IRQF_SHARED,
-			ITE_DRIVER_NAME, (void *)itdev))
-		goto failure;
-
 	/* set driver data into the pnp device */
 	pnp_set_drvdata(pdev, itdev);
 	itdev->pdev = pdev;
@@ -1614,22 +1590,30 @@ static int ite_probe(struct pnp_dev *pdev, const struct pnp_device_id
 	rdev->driver_name = ITE_DRIVER_NAME;
 	rdev->map_name = RC_MAP_RC6_MCE;
 
+	ret = -EBUSY;
+	/* now claim resources */
+	if (!request_region(itdev->cir_addr,
+				dev_desc->io_region_size, ITE_DRIVER_NAME))
+		goto failure;
+
+	if (request_irq(itdev->cir_irq, ite_cir_isr, IRQF_SHARED,
+			ITE_DRIVER_NAME, (void *)itdev))
+		goto failure2;
+
 	ret = rc_register_device(rdev);
 	if (ret)
-		goto failure;
+		goto failure3;
 
 	itdev->rdev = rdev;
 	ite_pr(KERN_NOTICE, "driver has been successfully loaded\n");
 
 	return 0;
 
+failure3:
+	free_irq(itdev->cir_irq, itdev);
+failure2:
+	release_region(itdev->cir_addr, itdev->params.io_region_size);
 failure:
-	if (itdev->cir_irq)
-		free_irq(itdev->cir_irq, itdev);
-
-	if (itdev->cir_addr)
-		release_region(itdev->cir_addr, itdev->params.io_region_size);
-
 	rc_free_device(rdev);
 	kfree(itdev);
 
@@ -1666,6 +1650,9 @@ static int ite_suspend(struct pnp_dev *pdev, pm_message_t state)
 
 	ite_dbg("%s called", __func__);
 
+	/* wait for any transmission to end */
+	wait_event_interruptible(dev->tx_ended, !dev->transmitting);
+
 	spin_lock_irqsave(&dev->lock, flags);
 
 	/* disable all interrupts */
@@ -1686,13 +1673,10 @@ static int ite_resume(struct pnp_dev *pdev)
 
 	spin_lock_irqsave(&dev->lock, flags);
 
-	if (dev->transmitting) {
-		/* wake up the transmitter */
-		wake_up_interruptible(&dev->tx_queue);
-	} else {
-		/* enable the receiver */
-		dev->params.enable_rx(dev);
-	}
+	/* reinitialize hardware config registers */
+	dev->params.init_hardware(dev);
+	/* enable the receiver */
+	dev->params.enable_rx(dev);
 
 	spin_unlock_irqrestore(&dev->lock, flags);
 

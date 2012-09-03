@@ -359,7 +359,6 @@
 #include <asm/byteorder.h>
 #include <asm/processor.h>
 #include <asm/types.h>
-#include <asm/system.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -4066,7 +4065,7 @@ __qla1280_print_scsi_cmd(struct scsi_cmnd *cmd)
 	   } */
 	printk("  tag=%d, transfersize=0x%x \n",
 	       cmd->tag, cmd->transfersize);
-	printk("  Pid=%li, SP=0x%p\n", cmd->serial_number, CMD_SP(cmd));
+	printk("  SP=0x%p\n", CMD_SP(cmd));
 	printk(" underflow size = 0x%x, direction=0x%x\n",
 	       cmd->underflow, cmd->sc_data_direction);
 }
@@ -4474,16 +4473,13 @@ qla1280_exit(void)
 	pci_unregister_driver(&qla1280_pci_driver);
 	/* release any allocated firmware images */
 	for (i = 0; i < QL_NUM_FW_IMAGES; i++) {
-		if (qla1280_fw_tbl[i].fw) {
-			release_firmware(qla1280_fw_tbl[i].fw);
-			qla1280_fw_tbl[i].fw = NULL;
-		}
+		release_firmware(qla1280_fw_tbl[i].fw);
+		qla1280_fw_tbl[i].fw = NULL;
 	}
 }
 
 module_init(qla1280_init);
 module_exit(qla1280_exit);
-
 
 MODULE_AUTHOR("Qlogic & Jes Sorensen");
 MODULE_DESCRIPTION("Qlogic ISP SCSI (qla1x80/qla1x160) driver");

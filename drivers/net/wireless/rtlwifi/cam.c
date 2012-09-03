@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2009-2010  Realtek Corporation.
+ * Copyright(c) 2009-2012  Realtek Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -23,8 +23,11 @@
  * Realtek Corporation, No. 2, Innovation Road II, Hsinchu Science Park,
  * Hsinchu 300, Taiwan.
  *
+ * Larry Finger <Larry.Finger@lwfinger.net>
+ *
  *****************************************************************************/
 
+#include <linux/export.h>
 #include "wifi.h"
 #include "cam.h"
 
@@ -49,11 +52,11 @@ static void rtl_cam_program_entry(struct ieee80211_hw *hw, u32 entry_no,
 	u32 target_content = 0;
 	u8 entry_i;
 
-	RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-		 ("key_cont_128:\n %x:%x:%x:%x:%x:%x\n",
-		  key_cont_128[0], key_cont_128[1],
-		  key_cont_128[2], key_cont_128[3],
-		  key_cont_128[4], key_cont_128[5]));
+	RT_TRACE(rtlpriv, COMP_SEC, DBG_LOUD,
+		 "key_cont_128:\n %x:%x:%x:%x:%x:%x\n",
+		 key_cont_128[0], key_cont_128[1],
+		 key_cont_128[2], key_cont_128[3],
+		 key_cont_128[4], key_cont_128[5]);
 
 	for (entry_i = 0; entry_i < CAM_CONTENT_COUNT; entry_i++) {
 		target_command = entry_i + CAM_CONTENT_COUNT * entry_no;
@@ -68,16 +71,12 @@ static void rtl_cam_program_entry(struct ieee80211_hw *hw, u32 entry_no,
 			rtl_write_dword(rtlpriv, rtlpriv->cfg->maps[RWCAM],
 					target_command);
 
-			RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-				 ("rtl_cam_program_entry(): "
-				  "WRITE %x: %x\n",
-				  rtlpriv->cfg->maps[WCAMI], target_content));
-			RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-				 ("The Key ID is %d\n", entry_no));
-			RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-				 ("rtl_cam_program_entry(): "
-				  "WRITE %x: %x\n",
-				  rtlpriv->cfg->maps[RWCAM], target_command));
+			RT_TRACE(rtlpriv, COMP_SEC, DBG_LOUD, "WRITE %x: %x\n",
+				 rtlpriv->cfg->maps[WCAMI], target_content);
+			RT_TRACE(rtlpriv, COMP_SEC, DBG_LOUD,
+				 "The Key ID is %d\n", entry_no);
+			RT_TRACE(rtlpriv, COMP_SEC, DBG_LOUD, "WRITE %x: %x\n",
+				 rtlpriv->cfg->maps[RWCAM], target_command);
 
 		} else if (entry_i == 1) {
 
@@ -91,12 +90,10 @@ static void rtl_cam_program_entry(struct ieee80211_hw *hw, u32 entry_no,
 			rtl_write_dword(rtlpriv, rtlpriv->cfg->maps[RWCAM],
 					target_command);
 
-			RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-				 ("rtl_cam_program_entry(): WRITE A4: %x\n",
-				  target_content));
-			RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-				 ("rtl_cam_program_entry(): WRITE A0: %x\n",
-				  target_command));
+			RT_TRACE(rtlpriv, COMP_SEC, DBG_LOUD, "WRITE A4: %x\n",
+				 target_content);
+			RT_TRACE(rtlpriv, COMP_SEC, DBG_LOUD, "WRITE A0: %x\n",
+				 target_command);
 
 		} else {
 
@@ -113,17 +110,15 @@ static void rtl_cam_program_entry(struct ieee80211_hw *hw, u32 entry_no,
 					target_command);
 			udelay(100);
 
-			RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-				 ("rtl_cam_program_entry(): WRITE A4: %x\n",
-				  target_content));
-			RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-				 ("rtl_cam_program_entry(): WRITE A0: %x\n",
-				  target_command));
+			RT_TRACE(rtlpriv, COMP_SEC, DBG_LOUD, "WRITE A4: %x\n",
+				 target_content);
+			RT_TRACE(rtlpriv, COMP_SEC, DBG_LOUD, "WRITE A0: %x\n",
+				 target_command);
 		}
 	}
 
-	RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-		 ("after set key, usconfig:%x\n", us_config));
+	RT_TRACE(rtlpriv, COMP_SEC, DBG_LOUD, "after set key, usconfig:%x\n",
+		 us_config);
 }
 
 u8 rtl_cam_add_one_entry(struct ieee80211_hw *hw, u8 *mac_addr,
@@ -134,14 +129,13 @@ u8 rtl_cam_add_one_entry(struct ieee80211_hw *hw, u8 *mac_addr,
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 
 	RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-		 ("EntryNo:%x, ulKeyId=%x, ulEncAlg=%x, "
-		  "ulUseDK=%x MacAddr" MAC_FMT "\n",
-		  ul_entry_idx, ul_key_id, ul_enc_alg,
-		  ul_default_key, MAC_ARG(mac_addr)));
+		 "EntryNo:%x, ulKeyId=%x, ulEncAlg=%x, ulUseDK=%x MacAddr %pM\n",
+		 ul_entry_idx, ul_key_id, ul_enc_alg,
+		 ul_default_key, mac_addr);
 
 	if (ul_key_id == TOTAL_CAM_ENTRY) {
 		RT_TRACE(rtlpriv, COMP_ERR, DBG_WARNING,
-			 ("<=== ulKeyId exceed!\n"));
+			 "<=== ulKeyId exceed!\n");
 		return 0;
 	}
 
@@ -154,7 +148,7 @@ u8 rtl_cam_add_one_entry(struct ieee80211_hw *hw, u8 *mac_addr,
 	rtl_cam_program_entry(hw, ul_entry_idx, mac_addr,
 			      (u8 *) key_content, us_config);
 
-	RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG, ("<===\n"));
+	RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG, "<===\n");
 
 	return 1;
 
@@ -167,7 +161,7 @@ int rtl_cam_delete_one_entry(struct ieee80211_hw *hw,
 	u32 ul_command;
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 
-	RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG, ("key_idx:%d\n", ul_key_id));
+	RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG, "key_idx:%d\n", ul_key_id);
 
 	ul_command = ul_key_id * CAM_CONTENT_COUNT;
 	ul_command = ul_command | BIT(31) | BIT(16);
@@ -176,9 +170,9 @@ int rtl_cam_delete_one_entry(struct ieee80211_hw *hw,
 	rtl_write_dword(rtlpriv, rtlpriv->cfg->maps[RWCAM], ul_command);
 
 	RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-		 ("rtl_cam_delete_one_entry(): WRITE A4: %x\n", 0));
+		 "rtl_cam_delete_one_entry(): WRITE A4: %x\n", 0);
 	RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-		 ("rtl_cam_delete_one_entry(): WRITE A0: %x\n", ul_command));
+		 "rtl_cam_delete_one_entry(): WRITE A0: %x\n", ul_command);
 
 	return 0;
 
@@ -230,9 +224,9 @@ void rtl_cam_mark_invalid(struct ieee80211_hw *hw, u8 uc_index)
 	rtl_write_dword(rtlpriv, rtlpriv->cfg->maps[RWCAM], ul_command);
 
 	RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-		 ("rtl_cam_mark_invalid(): WRITE A4: %x\n", ul_content));
+		 "rtl_cam_mark_invalid(): WRITE A4: %x\n", ul_content);
 	RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-		 ("rtl_cam_mark_invalid(): WRITE A0: %x\n", ul_command));
+		 "rtl_cam_mark_invalid(): WRITE A0: %x\n", ul_command);
 }
 EXPORT_SYMBOL(rtl_cam_mark_invalid);
 
@@ -280,12 +274,77 @@ void rtl_cam_empty_entry(struct ieee80211_hw *hw, u8 uc_index)
 		rtl_write_dword(rtlpriv, rtlpriv->cfg->maps[RWCAM], ul_command);
 
 		RT_TRACE(rtlpriv, COMP_SEC, DBG_LOUD,
-			 ("rtl_cam_empty_entry(): WRITE A4: %x\n",
-			  ul_content));
+			 "rtl_cam_empty_entry(): WRITE A4: %x\n",
+			 ul_content);
 		RT_TRACE(rtlpriv, COMP_SEC, DBG_LOUD,
-			 ("rtl_cam_empty_entry(): WRITE A0: %x\n",
-			  ul_command));
+			 "rtl_cam_empty_entry(): WRITE A0: %x\n",
+			 ul_command);
 	}
 
 }
 EXPORT_SYMBOL(rtl_cam_empty_entry);
+
+u8 rtl_cam_get_free_entry(struct ieee80211_hw *hw, u8 *sta_addr)
+{
+	struct rtl_priv *rtlpriv = rtl_priv(hw);
+	u32 bitmap = (rtlpriv->sec.hwsec_cam_bitmap) >> 4;
+	u8 entry_idx = 0;
+	u8 i, *addr;
+
+	if (NULL == sta_addr) {
+		RT_TRACE(rtlpriv, COMP_SEC, DBG_EMERG, "sta_addr is NULL\n");
+		return TOTAL_CAM_ENTRY;
+	}
+	/* Does STA already exist? */
+	for (i = 4; i < TOTAL_CAM_ENTRY; i++) {
+		addr = rtlpriv->sec.hwsec_cam_sta_addr[i];
+		if (memcmp(addr, sta_addr, ETH_ALEN) == 0)
+			return i;
+	}
+	/* Get a free CAM entry. */
+	for (entry_idx = 4; entry_idx < TOTAL_CAM_ENTRY; entry_idx++) {
+		if ((bitmap & BIT(0)) == 0) {
+			RT_TRACE(rtlpriv, COMP_SEC, DBG_EMERG,
+				 "-----hwsec_cam_bitmap: 0x%x entry_idx=%d\n",
+				 rtlpriv->sec.hwsec_cam_bitmap, entry_idx);
+			rtlpriv->sec.hwsec_cam_bitmap |= BIT(0) << entry_idx;
+			memcpy(rtlpriv->sec.hwsec_cam_sta_addr[entry_idx],
+			       sta_addr, ETH_ALEN);
+			return entry_idx;
+		}
+		bitmap = bitmap >> 1;
+	}
+	return TOTAL_CAM_ENTRY;
+}
+EXPORT_SYMBOL(rtl_cam_get_free_entry);
+
+void rtl_cam_del_entry(struct ieee80211_hw *hw, u8 *sta_addr)
+{
+	struct rtl_priv *rtlpriv = rtl_priv(hw);
+	u32 bitmap;
+	u8 i, *addr;
+
+	if (NULL == sta_addr) {
+		RT_TRACE(rtlpriv, COMP_SEC, DBG_EMERG, "sta_addr is NULL\n");
+	}
+
+	if (is_zero_ether_addr(sta_addr)) {
+		RT_TRACE(rtlpriv, COMP_SEC, DBG_EMERG,
+			 "sta_addr is %pM\n", sta_addr);
+		return;
+	}
+	/* Does STA already exist? */
+	for (i = 4; i < TOTAL_CAM_ENTRY; i++) {
+		addr = rtlpriv->sec.hwsec_cam_sta_addr[i];
+		bitmap = (rtlpriv->sec.hwsec_cam_bitmap) >> i;
+		if (((bitmap & BIT(0)) == BIT(0)) &&
+		    (memcmp(addr, sta_addr, ETH_ALEN) == 0)) {
+			/* Remove from HW Security CAM */
+			memset(rtlpriv->sec.hwsec_cam_sta_addr[i], 0, ETH_ALEN);
+			rtlpriv->sec.hwsec_cam_bitmap &= ~(BIT(0) << i);
+			pr_info("&&&&&&&&&del entry %d\n", i);
+		}
+	}
+	return;
+}
+EXPORT_SYMBOL(rtl_cam_del_entry);

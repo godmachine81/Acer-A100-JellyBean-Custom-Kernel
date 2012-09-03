@@ -15,8 +15,8 @@
 
 #include <asm/gptimers.h>
 
-#include "../iio.h"
-#include "../trigger.h"
+#include <linux/iio/iio.h>
+#include <linux/iio/trigger.h>
 
 struct bfin_timer {
 	unsigned short id, bit;
@@ -106,16 +106,19 @@ static ssize_t iio_bfin_tmr_frequency_show(struct device *dev,
 
 static DEVICE_ATTR(frequency, S_IRUGO | S_IWUSR, iio_bfin_tmr_frequency_show,
 		   iio_bfin_tmr_frequency_store);
-static IIO_TRIGGER_NAME_ATTR;
 
 static struct attribute *iio_bfin_tmr_trigger_attrs[] = {
 	&dev_attr_frequency.attr,
-	&dev_attr_name.attr,
 	NULL,
 };
 
 static const struct attribute_group iio_bfin_tmr_trigger_attr_group = {
 	.attrs = iio_bfin_tmr_trigger_attrs,
+};
+
+static const struct attribute_group *iio_bfin_tmr_trigger_attr_groups[] = {
+	&iio_bfin_tmr_trigger_attr_group,
+	NULL
 };
 
 
@@ -139,6 +142,10 @@ static int iio_bfin_tmr_get_number(int irq)
 
 	return -ENODEV;
 }
+
+static const struct iio_trigger_ops iio_bfin_tmr_trigger_ops = {
+	.owner = THIS_MODULE,
+};
 
 static int __devinit iio_bfin_tmr_trigger_probe(struct platform_device *pdev)
 {
@@ -165,24 +172,18 @@ static int __devinit iio_bfin_tmr_trigger_probe(struct platform_device *pdev)
 	st->timer_num = ret;
 	st->t = &iio_bfin_timer_code[st->timer_num];
 
-	st->trig = iio_allocate_trigger();
+	st->trig = iio_trigger_alloc("bfintmr%d", st->timer_num);
 	if (!st->trig) {
 		ret = -ENOMEM;
 		goto out1;
 	}
 
 	st->trig->private_data = st;
-	st->trig->control_attrs = &iio_bfin_tmr_trigger_attr_group;
-	st->trig->owner = THIS_MODULE;
-	st->trig->name = kasprintf(GFP_KERNEL, "bfintmr%d", st->timer_num);
-	if (st->trig->name == NULL) {
-		ret = -ENOMEM;
-		goto out2;
-	}
-
+	st->trig->ops = &iio_bfin_tmr_trigger_ops;
+	st->trig->dev.groups = iio_bfin_tmr_trigger_attr_groups;
 	ret = iio_trigger_register(st->trig);
 	if (ret)
-		goto out3;
+		goto out2;
 
 	ret = request_irq(st->irq, iio_bfin_tmr_trigger_isr,
 			  0, st->trig->name, st);
@@ -201,10 +202,8 @@ static int __devinit iio_bfin_tmr_trigger_probe(struct platform_device *pdev)
 	return 0;
 out4:
 	iio_trigger_unregister(st->trig);
-out3:
-	kfree(st->trig->name);
 out2:
-	iio_put_trigger(st->trig);
+	iio_trigger_put(st->trig);
 out1:
 	kfree(st);
 out:
@@ -218,8 +217,7 @@ static int __devexit iio_bfin_tmr_trigger_remove(struct platform_device *pdev)
 	disable_gptimers(st->t->bit);
 	free_irq(st->irq, st);
 	iio_trigger_unregister(st->trig);
-	kfree(st->trig->name);
-	iio_put_trigger(st->trig);
+	iio_trigger_put(st->trig);
 	kfree(st);
 
 	return 0;
@@ -234,17 +232,7 @@ static struct platform_driver iio_bfin_tmr_trigger_driver = {
 	.remove = __devexit_p(iio_bfin_tmr_trigger_remove),
 };
 
-static int __init iio_bfin_tmr_trig_init(void)
-{
-	return platform_driver_register(&iio_bfin_tmr_trigger_driver);
-}
-module_init(iio_bfin_tmr_trig_init);
-
-static void __exit iio_bfin_tmr_trig_exit(void)
-{
-	platform_driver_unregister(&iio_bfin_tmr_trigger_driver);
-}
-module_exit(iio_bfin_tmr_trig_exit);
+module_platform_driver(iio_bfin_tmr_trigger_driver);
 
 MODULE_AUTHOR("Michael Hennerich <hennerich@blackfin.uclinux.org>");
 MODULE_DESCRIPTION("Blackfin system timer based trigger for the iio subsystem");

@@ -1,6 +1,4 @@
 /*
- * linux/drivers/serial/21285.c
- *
  * Driver for the serial port on the 21285 StrongArm-110 core logic chip.
  *
  * Based on drivers/char/serial.c
@@ -18,6 +16,7 @@
 
 #include <asm/irq.h>
 #include <asm/mach-types.h>
+#include <asm/system_info.h>
 #include <asm/hardware/dec21285.h>
 #include <mach/hardware.h>
 
@@ -333,7 +332,7 @@ static int serial21285_verify_port(struct uart_port *port, struct serial_struct 
 	int ret = 0;
 	if (ser->type != PORT_UNKNOWN && ser->type != PORT_21285)
 		ret = -EINVAL;
-	if (ser->irq != NO_IRQ)
+	if (ser->irq <= 0)
 		ret = -EINVAL;
 	if (ser->baud_base != port->uartclk / 16)
 		ret = -EINVAL;
@@ -362,7 +361,7 @@ static struct uart_ops serial21285_ops = {
 static struct uart_port serial21285_port = {
 	.mapbase	= 0x42000160,
 	.iotype		= UPIO_MEM,
-	.irq		= NO_IRQ,
+	.irq		= 0,
 	.fifosize	= 16,
 	.ops		= &serial21285_ops,
 	.flags		= UPF_BOOT_AUTOCONF,

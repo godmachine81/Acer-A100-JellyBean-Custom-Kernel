@@ -32,10 +32,26 @@
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
 
-#include <asm/atomic.h>
+#include <linux/atomic.h>
 #include <asm/byteorder.h>
 
 #include "core.h"
+
+#define define_fw_printk_level(func, kern_level)		\
+void func(const struct fw_card *card, const char *fmt, ...)	\
+{								\
+	struct va_format vaf;					\
+	va_list args;						\
+								\
+	va_start(args, fmt);					\
+	vaf.fmt = fmt;						\
+	vaf.va = &args;						\
+	printk(kern_level KBUILD_MODNAME " %s: %pV",		\
+	       dev_name(card->device), &vaf);			\
+	va_end(args);						\
+}
+define_fw_printk_level(fw_err, KERN_ERR);
+define_fw_printk_level(fw_notice, KERN_NOTICE);
 
 int fw_compute_block_crc(__be32 *block)
 {
@@ -228,8 +244,8 @@ void fw_schedule_bus_reset(struct fw_card *card, bool delayed, bool short_reset)
 
 	/* Use an arbitrary short delay to combine multiple reset requests. */
 	fw_card_get(card);
-	if (!schedule_delayed_work(&card->br_work,
-				   delayed ? DIV_ROUND_UP(HZ, 100) : 0))
+	if (!queue_delayed_work(fw_workqueue, &card->br_work,
+				delayed ? DIV_ROUND_UP(HZ, 100) : 0))
 		fw_card_put(card);
 }
 EXPORT_SYMBOL(fw_schedule_bus_reset);
@@ -241,7 +257,7 @@ static void br_work(struct work_struct *work)
 	/* Delay for 2s after last reset per IEEE 1394 clause 8.2.1. */
 	if (card->reset_jiffies != 0 &&
 	    time_before64(get_jiffies_64(), card->reset_jiffies + 2 * HZ)) {
-		if (!schedule_delayed_work(&card->br_work, 2 * HZ))
+		if (!queue_delayed_work(fw_workqueue, &card->br_work, 2 * HZ))
 			fw_card_put(card);
 		return;
 	}
@@ -258,10 +274,9 @@ static void allocate_broadcast_channel(struct fw_card *card, int generation)
 
 	if (!card->broadcast_channel_allocated) {
 		fw_iso_resource_manage(card, generation, 1ULL << 31,
-				       &channel, &bandwidth, true,
-				       card->bm_transaction_data);
+				       &channel, &bandwidth, true);
 		if (channel != 31) {
-			fw_notify("failed to allocate broadcast channel\n");
+			fw_notice(card, "failed to allocate broadcast channel\n");
 			return;
 		}
 		card->broadcast_channel_allocated = true;
@@ -294,6 +309,7 @@ static void bm_work(struct work_struct *work)
 	bool root_device_is_cmc;
 	bool irm_is_1394_1995_only;
 	bool keep_this_irm;
+	__be32 transaction_data[2];
 
 	spin_lock_irq(&card->lock);
 
@@ -343,33 +359,33 @@ static void bm_work(struct work_struct *work)
 
 		if (!card->irm_node->link_on) {
 			new_root_id = local_id;
-			fw_notify("%s, making local node (%02x) root.\n",
+			fw_notice(card, "%s, making local node (%02x) root\n",
 				  "IRM has link off", new_root_id);
 			goto pick_me;
 		}
 
 		if (irm_is_1394_1995_only && !keep_this_irm) {
 			new_root_id = local_id;
-			fw_notify("%s, making local node (%02x) root.\n",
+			fw_notice(card, "%s, making local node (%02x) root\n",
 				  "IRM is not 1394a compliant", new_root_id);
 			goto pick_me;
 		}
 
-		card->bm_transaction_data[0] = cpu_to_be32(0x3f);
-		card->bm_transaction_data[1] = cpu_to_be32(local_id);
+		transaction_data[0] = cpu_to_be32(0x3f);
+		transaction_data[1] = cpu_to_be32(local_id);
 
 		spin_unlock_irq(&card->lock);
 
 		rcode = fw_run_transaction(card, TCODE_LOCK_COMPARE_SWAP,
 				irm_id, generation, SCODE_100,
 				CSR_REGISTER_BASE + CSR_BUS_MANAGER_ID,
-				card->bm_transaction_data, 8);
+				transaction_data, 8);
 
 		if (rcode == RCODE_GENERATION)
 			/* Another bus reset, BM work has been rescheduled. */
 			goto out;
 
-		bm_id = be32_to_cpu(card->bm_transaction_data[0]);
+		bm_id = be32_to_cpu(transaction_data[0]);
 
 		spin_lock_irq(&card->lock);
 		if (rcode == RCODE_COMPLETE && generation == card->generation)
@@ -405,8 +421,8 @@ static void bm_work(struct work_struct *work)
 			 * root, and thus, IRM.
 			 */
 			new_root_id = local_id;
-			fw_notify("%s, making local node (%02x) root.\n",
-				  "BM lock failed", new_root_id);
+			fw_notice(card, "BM lock failed (%s), making local node (%02x) root\n",
+				  fw_rcode_string(rcode), new_root_id);
 			goto pick_me;
 		}
 	} else if (card->bm_generation != generation) {
@@ -478,8 +494,8 @@ static void bm_work(struct work_struct *work)
 	spin_unlock_irq(&card->lock);
 
 	if (do_reset) {
-		fw_notify("phy config: card %d, new root=%x, gap_count=%d\n",
-			  card->index, new_root_id, gap_count);
+		fw_notice(card, "phy config: new root=%x, gap_count=%d\n",
+			  new_root_id, gap_count);
 		fw_send_phy_config(card, new_root_id, generation, gap_count);
 		reset_bus(card, true);
 		/* Will allocate broadcast channel after the reset. */
@@ -490,11 +506,11 @@ static void bm_work(struct work_struct *work)
 		/*
 		 * Make sure that the cycle master sends cycle start packets.
 		 */
-		card->bm_transaction_data[0] = cpu_to_be32(CSR_STATE_BIT_CMSTR);
+		transaction_data[0] = cpu_to_be32(CSR_STATE_BIT_CMSTR);
 		rcode = fw_run_transaction(card, TCODE_WRITE_QUADLET_REQUEST,
 				root_id, generation, SCODE_100,
 				CSR_REGISTER_BASE + CSR_STATE_SET,
-				card->bm_transaction_data, 4);
+				transaction_data, 4);
 		if (rcode == RCODE_GENERATION)
 			goto out;
 	}
@@ -630,6 +646,15 @@ static int dummy_queue_iso(struct fw_iso_context *ctx, struct fw_iso_packet *p,
 	return -ENODEV;
 }
 
+static void dummy_flush_queue_iso(struct fw_iso_context *ctx)
+{
+}
+
+static int dummy_flush_iso_completions(struct fw_iso_context *ctx)
+{
+	return -ENODEV;
+}
+
 static const struct fw_card_driver dummy_driver_template = {
 	.read_phy_reg		= dummy_read_phy_reg,
 	.update_phy_reg		= dummy_update_phy_reg,
@@ -641,6 +666,8 @@ static const struct fw_card_driver dummy_driver_template = {
 	.start_iso		= dummy_start_iso,
 	.set_iso_channels	= dummy_set_iso_channels,
 	.queue_iso		= dummy_queue_iso,
+	.flush_queue_iso	= dummy_flush_queue_iso,
+	.flush_iso_completions	= dummy_flush_iso_completions,
 };
 
 void fw_card_release(struct kref *kref)
@@ -649,6 +676,7 @@ void fw_card_release(struct kref *kref)
 
 	complete(&card->done);
 }
+EXPORT_SYMBOL_GPL(fw_card_release);
 
 void fw_core_remove_card(struct fw_card *card)
 {

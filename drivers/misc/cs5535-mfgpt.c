@@ -174,7 +174,7 @@ struct cs5535_mfgpt_timer *cs5535_mfgpt_alloc_timer(int timer_nr, int domain)
 		timer_nr = t < max ? (int) t : -1;
 	} else {
 		/* check if the requested timer's available */
-		if (test_bit(timer_nr, mfgpt->avail))
+		if (!test_bit(timer_nr, mfgpt->avail))
 			timer_nr = -1;
 	}
 
@@ -246,7 +246,7 @@ EXPORT_SYMBOL_GPL(cs5535_mfgpt_write);
  * Jordan tells me that he and Mitch once played w/ it, but it's unclear
  * what the results of that were (and they experienced some instability).
  */
-static void __init reset_all_timers(void)
+static void __devinit reset_all_timers(void)
 {
 	uint32_t val, dummy;
 
@@ -262,7 +262,7 @@ static void __init reset_all_timers(void)
  * In other cases (such as with VSAless OpenFirmware), the system firmware
  * leaves timers available for us to use.
  */
-static int __init scan_timers(struct cs5535_mfgpt_chip *mfgpt)
+static int __devinit scan_timers(struct cs5535_mfgpt_chip *mfgpt)
 {
 	struct cs5535_mfgpt_timer timer = { .chip = mfgpt };
 	unsigned long flags;
@@ -329,7 +329,7 @@ done:
 	return err;
 }
 
-static struct platform_driver cs5535_mfgpt_drv = {
+static struct platform_driver cs5535_mfgpt_driver = {
 	.driver = {
 		.name = DRV_NAME,
 		.owner = THIS_MODULE,
@@ -340,7 +340,7 @@ static struct platform_driver cs5535_mfgpt_drv = {
 
 static int __init cs5535_mfgpt_init(void)
 {
-	return platform_driver_register(&cs5535_mfgpt_drv);
+	return platform_driver_register(&cs5535_mfgpt_driver);
 }
 
 module_init(cs5535_mfgpt_init);

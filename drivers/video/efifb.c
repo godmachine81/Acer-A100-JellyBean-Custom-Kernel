@@ -16,6 +16,10 @@
 #include <linux/pci.h>
 #include <video/vga.h>
 
+static bool request_mem_succeeded = false;
+
+static struct pci_dev *default_vga;
+
 static struct fb_var_screeninfo efifb_defined __devinitdata = {
 	.activate		= FB_ACTIVATE_NOW,
 	.height			= -1,
@@ -242,9 +246,9 @@ static int set_system(const struct dmi_system_id *id)
 		return 0;
 	}
 
-	printk(KERN_INFO "efifb: dmi detected %s - framebuffer at %p "
+	printk(KERN_INFO "efifb: dmi detected %s - framebuffer at 0x%08x "
 			 "(%dx%d, stride %d)\n", id->ident,
-			 (void *)screen_info.lfb_base, screen_info.lfb_width,
+			 screen_info.lfb_base, screen_info.lfb_width,
 			 screen_info.lfb_height, screen_info.lfb_linelength);
 
 
@@ -281,7 +285,9 @@ static void efifb_destroy(struct fb_info *info)
 {
 	if (info->screen_base)
 		iounmap(info->screen_base);
-	release_mem_region(info->apertures->ranges[0].base, info->apertures->ranges[0].size);
+	if (request_mem_succeeded)
+		release_mem_region(info->apertures->ranges[0].base,
+				   info->apertures->ranges[0].size);
 	framebuffer_release(info);
 }
 
@@ -294,46 +300,82 @@ static struct fb_ops efifb_ops = {
 	.fb_imageblit	= cfb_imageblit,
 };
 
+struct pci_dev *vga_default_device(void)
+{
+	return default_vga;
+}
+
+EXPORT_SYMBOL_GPL(vga_default_device);
+
+void vga_set_default_device(struct pci_dev *pdev)
+{
+	default_vga = pdev;
+}
+
 static int __init efifb_setup(char *options)
 {
 	char *this_opt;
 	int i;
+	struct pci_dev *dev = NULL;
 
-	if (!options || !*options)
-		return 0;
+	if (options && *options) {
+		while ((this_opt = strsep(&options, ",")) != NULL) {
+			if (!*this_opt) continue;
 
-	while ((this_opt = strsep(&options, ",")) != NULL) {
-		if (!*this_opt) continue;
-
-		for (i = 0; i < M_UNKNOWN; i++) {
-			if (!strcmp(this_opt, dmi_list[i].optname) &&
-					dmi_list[i].base != 0) {
-				screen_info.lfb_base = dmi_list[i].base;
-				screen_info.lfb_linelength = dmi_list[i].stride;
-				screen_info.lfb_width = dmi_list[i].width;
-				screen_info.lfb_height = dmi_list[i].height;
+			for (i = 0; i < M_UNKNOWN; i++) {
+				if (!strcmp(this_opt, dmi_list[i].optname) &&
+				    dmi_list[i].base != 0) {
+					screen_info.lfb_base = dmi_list[i].base;
+					screen_info.lfb_linelength = dmi_list[i].stride;
+					screen_info.lfb_width = dmi_list[i].width;
+					screen_info.lfb_height = dmi_list[i].height;
+				}
 			}
+			if (!strncmp(this_opt, "base:", 5))
+				screen_info.lfb_base = simple_strtoul(this_opt+5, NULL, 0);
+			else if (!strncmp(this_opt, "stride:", 7))
+				screen_info.lfb_linelength = simple_strtoul(this_opt+7, NULL, 0) * 4;
+			else if (!strncmp(this_opt, "height:", 7))
+				screen_info.lfb_height = simple_strtoul(this_opt+7, NULL, 0);
+			else if (!strncmp(this_opt, "width:", 6))
+				screen_info.lfb_width = simple_strtoul(this_opt+6, NULL, 0);
 		}
-		if (!strncmp(this_opt, "base:", 5))
-			screen_info.lfb_base = simple_strtoul(this_opt+5, NULL, 0);
-		else if (!strncmp(this_opt, "stride:", 7))
-			screen_info.lfb_linelength = simple_strtoul(this_opt+7, NULL, 0) * 4;
-		else if (!strncmp(this_opt, "height:", 7))
-			screen_info.lfb_height = simple_strtoul(this_opt+7, NULL, 0);
-		else if (!strncmp(this_opt, "width:", 6))
-			screen_info.lfb_width = simple_strtoul(this_opt+6, NULL, 0);
 	}
+
+	for_each_pci_dev(dev) {
+		int i;
+
+		if ((dev->class >> 8) != PCI_CLASS_DISPLAY_VGA)
+			continue;
+
+		for (i=0; i < DEVICE_COUNT_RESOURCE; i++) {
+			resource_size_t start, end;
+
+			if (!(pci_resource_flags(dev, i) & IORESOURCE_MEM))
+				continue;
+
+			start = pci_resource_start(dev, i);
+			end  = pci_resource_end(dev, i);
+
+			if (!start || !end)
+				continue;
+
+			if (screen_info.lfb_base >= start &&
+			    (screen_info.lfb_base + screen_info.lfb_size) < end)
+				default_vga = dev;
+		}
+	}
+
 	return 0;
 }
 
-static int __devinit efifb_probe(struct platform_device *dev)
+static int __init efifb_probe(struct platform_device *dev)
 {
 	struct fb_info *info;
 	int err;
 	unsigned int size_vmode;
 	unsigned int size_remap;
 	unsigned int size_total;
-	int request_succeeded = 0;
 
 	if (!screen_info.lfb_depth)
 		screen_info.lfb_depth = 32;
@@ -387,7 +429,7 @@ static int __devinit efifb_probe(struct platform_device *dev)
 	efifb_fix.smem_len = size_remap;
 
 	if (request_mem_region(efifb_fix.smem_start, size_remap, "efifb")) {
-		request_succeeded = 1;
+		request_mem_succeeded = true;
 	} else {
 		/* We cannot make this fatal. Sometimes this comes from magic
 		   spaces our resource handlers simply don't know about */
@@ -413,7 +455,7 @@ static int __devinit efifb_probe(struct platform_device *dev)
 	info->apertures->ranges[0].base = efifb_fix.smem_start;
 	info->apertures->ranges[0].size = size_remap;
 
-	info->screen_base = ioremap(efifb_fix.smem_start, efifb_fix.smem_len);
+	info->screen_base = ioremap_wc(efifb_fix.smem_start, efifb_fix.smem_len);
 	if (!info->screen_base) {
 		printk(KERN_ERR "efifb: abort, cannot ioremap video memory "
 				"0x%x @ 0x%lx\n",
@@ -491,13 +533,12 @@ err_unmap:
 err_release_fb:
 	framebuffer_release(info);
 err_release_mem:
-	if (request_succeeded)
+	if (request_mem_succeeded)
 		release_mem_region(efifb_fix.smem_start, size_total);
 	return err;
 }
 
 static struct platform_driver efifb_driver = {
-	.probe	= efifb_probe,
 	.driver	= {
 		.name	= "efifb",
 	},
@@ -528,13 +569,21 @@ static int __init efifb_init(void)
 	if (!screen_info.lfb_linelength)
 		return -ENODEV;
 
-	ret = platform_driver_register(&efifb_driver);
+	ret = platform_device_register(&efifb_device);
+	if (ret)
+		return ret;
 
-	if (!ret) {
-		ret = platform_device_register(&efifb_device);
-		if (ret)
-			platform_driver_unregister(&efifb_driver);
+	/*
+	 * This is not just an optimization.  We will interfere
+	 * with a real driver if we get reprobed, so don't allow
+	 * it.
+	 */
+	ret = platform_driver_probe(&efifb_driver, efifb_probe);
+	if (ret) {
+		platform_device_unregister(&efifb_device);
+		return ret;
 	}
+
 	return ret;
 }
 module_init(efifb_init);

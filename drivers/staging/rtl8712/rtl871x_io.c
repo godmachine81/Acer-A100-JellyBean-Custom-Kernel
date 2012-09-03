@@ -73,8 +73,7 @@ static uint _init_intf_hdl(struct _adapter *padapter,
 		goto _init_intf_hdl_fail;
 	return _SUCCESS;
 _init_intf_hdl_fail:
-	if (pintf_priv)
-		kfree((u8 *)pintf_priv);
+	kfree(pintf_priv);
 	return _FAIL;
 }
 
@@ -84,8 +83,7 @@ static void _unload_intf_hdl(struct intf_priv *pintfpriv)
 
 	unload_intf_priv = &r8712_usb_unload_intf_priv;
 	unload_intf_priv(pintfpriv);
-	if (pintfpriv)
-		kfree((u8 *)pintfpriv);
+	kfree(pintfpriv);
 }
 
 static uint register_intf_hdl(u8 *dev, struct intf_hdl *pintfhdl)
@@ -133,7 +131,6 @@ uint r8712_alloc_io_queue(struct _adapter *adapter)
 	pio_req = (struct io_req *)(pio_queue->free_ioreqs_buf);
 	for (i = 0; i < NUM_IOREQ; i++) {
 		_init_listhead(&pio_req->list);
-		sema_init(&pio_req->sema, 0);
 		list_insert_tail(&pio_req->list, &pio_queue->free_ioreqs);
 		pio_req++;
 	}

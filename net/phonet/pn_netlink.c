@@ -5,8 +5,8 @@
  *
  * Copyright (C) 2008 Nokia Corporation.
  *
- * Contact: Remi Denis-Courmont <remi.denis-courmont@nokia.com>
- * Original author: Sakari Ailus <sakari.ailus@nokia.com>
+ * Authors: Sakari Ailus <sakari.ailus@nokia.com>
+ *          Remi Denis-Courmont
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -116,7 +116,8 @@ static int fill_addr(struct sk_buff *skb, struct net_device *dev, u8 addr,
 	ifm->ifa_flags = IFA_F_PERMANENT;
 	ifm->ifa_scope = RT_SCOPE_LINK;
 	ifm->ifa_index = dev->ifindex;
-	NLA_PUT_U8(skb, IFA_LOCAL, addr);
+	if (nla_put_u8(skb, IFA_LOCAL, addr))
+		goto nla_put_failure;
 	return nlmsg_end(skb, nlh);
 
 nla_put_failure:
@@ -183,8 +184,9 @@ static int fill_route(struct sk_buff *skb, struct net_device *dev, u8 dst,
 	rtm->rtm_scope = RT_SCOPE_UNIVERSE;
 	rtm->rtm_type = RTN_UNICAST;
 	rtm->rtm_flags = 0;
-	NLA_PUT_U8(skb, RTA_DST, dst);
-	NLA_PUT_U32(skb, RTA_OIF, dev->ifindex);
+	if (nla_put_u8(skb, RTA_DST, dst) ||
+	    nla_put_u32(skb, RTA_OIF, dev->ifindex))
+		goto nla_put_failure;
 	return nlmsg_end(skb, nlh);
 
 nla_put_failure:
@@ -264,10 +266,11 @@ static int route_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 	struct net *net = sock_net(skb->sk);
 	u8 addr, addr_idx = 0, addr_start_idx = cb->args[0];
 
+	rcu_read_lock();
 	for (addr = 0; addr < 64; addr++) {
 		struct net_device *dev;
 
-		dev = phonet_route_get(net, addr << 2);
+		dev = phonet_route_get_rcu(net, addr << 2);
 		if (!dev)
 			continue;
 
@@ -279,6 +282,7 @@ static int route_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 	}
 
 out:
+	rcu_read_unlock();
 	cb->args[0] = addr_idx;
 	cb->args[1] = 0;
 
@@ -287,15 +291,16 @@ out:
 
 int __init phonet_netlink_register(void)
 {
-	int err = __rtnl_register(PF_PHONET, RTM_NEWADDR, addr_doit, NULL);
+	int err = __rtnl_register(PF_PHONET, RTM_NEWADDR, addr_doit,
+				  NULL, NULL);
 	if (err)
 		return err;
 
 	/* Further __rtnl_register() cannot fail */
-	__rtnl_register(PF_PHONET, RTM_DELADDR, addr_doit, NULL);
-	__rtnl_register(PF_PHONET, RTM_GETADDR, NULL, getaddr_dumpit);
-	__rtnl_register(PF_PHONET, RTM_NEWROUTE, route_doit, NULL);
-	__rtnl_register(PF_PHONET, RTM_DELROUTE, route_doit, NULL);
-	__rtnl_register(PF_PHONET, RTM_GETROUTE, NULL, route_dumpit);
+	__rtnl_register(PF_PHONET, RTM_DELADDR, addr_doit, NULL, NULL);
+	__rtnl_register(PF_PHONET, RTM_GETADDR, NULL, getaddr_dumpit, NULL);
+	__rtnl_register(PF_PHONET, RTM_NEWROUTE, route_doit, NULL, NULL);
+	__rtnl_register(PF_PHONET, RTM_DELROUTE, route_doit, NULL, NULL);
+	__rtnl_register(PF_PHONET, RTM_GETROUTE, NULL, route_dumpit, NULL);
 	return 0;
 }

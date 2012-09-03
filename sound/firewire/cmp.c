@@ -32,7 +32,7 @@ enum bus_reset_handling {
 	SUCCEED_ON_BUS_RESET,
 };
 
-static __attribute__((format(printf, 2, 3)))
+static __printf(2, 3)
 void cmp_error(struct cmp_connection *c, const char *fmt, ...)
 {
 	va_list va;
@@ -49,10 +49,9 @@ static int pcr_modify(struct cmp_connection *c,
 		      enum bus_reset_handling bus_reset_handling)
 {
 	struct fw_device *device = fw_parent_device(c->resources.unit);
-	__be32 *buffer = c->resources.buffer;
 	int generation = c->resources.generation;
 	int rcode, errors = 0;
-	__be32 old_arg;
+	__be32 old_arg, buffer[2];
 	int err;
 
 	buffer[0] = c->last_pcr_value;
@@ -85,7 +84,7 @@ static int pcr_modify(struct cmp_connection *c,
 	return 0;
 
 io_error:
-	cmp_error(c, "transaction failed: %s\n", rcode_string(rcode));
+	cmp_error(c, "transaction failed: %s\n", fw_rcode_string(rcode));
 	return -EIO;
 
 bus_reset:

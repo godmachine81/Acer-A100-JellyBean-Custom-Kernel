@@ -104,7 +104,7 @@ get_endpoints(struct usbtest_dev *dev, struct usb_interface *intf)
 		alt = intf->altsetting + tmp;
 
 		/* take the first altsetting with in-bulk + out-bulk;
-		 * ignore other endpoints and altsetttings.
+		 * ignore other endpoints and altsettings.
 		 */
 		for (ep = 0; ep < alt->desc.bNumEndpoints; ep++) {
 			struct usb_host_endpoint	*e;
@@ -268,9 +268,9 @@ static inline void simple_fill_buf(struct urb *urb)
 	}
 }
 
-static inline unsigned buffer_offset(void *buf)
+static inline unsigned long buffer_offset(void *buf)
 {
-	return (unsigned)buf & (ARCH_KMALLOC_MINALIGN - 1);
+	return (unsigned long)buf & (ARCH_KMALLOC_MINALIGN - 1);
 }
 
 static int check_guard_bytes(struct usbtest_dev *tdev, struct urb *urb)
@@ -329,7 +329,7 @@ static int simple_check_buf(struct usbtest_dev *tdev, struct urb *urb)
 
 static void simple_free_urb(struct urb *urb)
 {
-	unsigned offset = buffer_offset(urb->transfer_buffer);
+	unsigned long offset = buffer_offset(urb->transfer_buffer);
 
 	if (urb->transfer_flags & URB_NO_TRANSFER_DMA_MAP)
 		usb_free_coherent(
@@ -359,8 +359,10 @@ static int simple_io(
 	urb->context = &completion;
 	while (retval == 0 && iterations-- > 0) {
 		init_completion(&completion);
-		if (usb_pipeout(urb->pipe))
+		if (usb_pipeout(urb->pipe)) {
 			simple_fill_buf(urb);
+			urb->transfer_flags |= URB_ZERO_PACKET;
+		}
 		retval = usb_submit_urb(urb, GFP_KERNEL);
 		if (retval != 0)
 			break;
@@ -421,7 +423,7 @@ alloc_sglist(int nents, int max, int vary)
 	unsigned		i;
 	unsigned		size = max;
 
-	sg = kmalloc(nents * sizeof *sg, GFP_KERNEL);
+	sg = kmalloc_array(nents, sizeof *sg, GFP_KERNEL);
 	if (!sg)
 		return NULL;
 	sg_init_table(sg, nents);
@@ -902,6 +904,9 @@ test_ctrl_queue(struct usbtest_dev *dev, struct usbtest_param *param)
 	struct ctrl_ctx		context;
 	int			i;
 
+	if (param->sglen == 0 || param->iterations > UINT_MAX / param->sglen)
+		return -EOPNOTSUPP;
+
 	spin_lock_init(&context.lock);
 	context.dev = dev;
 	init_completion(&context.complete);
@@ -1023,13 +1028,18 @@ test_ctrl_queue(struct usbtest_dev *dev, struct usbtest_param *param)
 		case 13:	/* short read, resembling case 10 */
 			req.wValue = cpu_to_le16((USB_DT_CONFIG << 8) | 0);
 			/* last data packet "should" be DATA1, not DATA0 */
-			len = 1024 - udev->descriptor.bMaxPacketSize0;
+			if (udev->speed == USB_SPEED_SUPER)
+				len = 1024 - 512;
+			else
+				len = 1024 - udev->descriptor.bMaxPacketSize0;
 			expected = -EREMOTEIO;
 			break;
 		case 14:	/* short read; try to fill the last packet */
 			req.wValue = cpu_to_le16((USB_DT_DEVICE << 8) | 0);
 			/* device descriptor size == 18 bytes */
 			len = udev->descriptor.bMaxPacketSize0;
+			if (udev->speed == USB_SPEED_SUPER)
+				len = 512;
 			switch (len) {
 			case 8:
 				len = 24;
@@ -1195,6 +1205,104 @@ static int unlink_simple(struct usbtest_dev *dev, int pipe, int len)
 
 /*-------------------------------------------------------------------------*/
 
+struct queued_ctx {
+	struct completion	complete;
+	atomic_t		pending;
+	unsigned		num;
+	int			status;
+	struct urb		**urbs;
+};
+
+static void unlink_queued_callback(struct urb *urb)
+{
+	int			status = urb->status;
+	struct queued_ctx	*ctx = urb->context;
+
+	if (ctx->status)
+		goto done;
+	if (urb == ctx->urbs[ctx->num - 4] || urb == ctx->urbs[ctx->num - 2]) {
+		if (status == -ECONNRESET)
+			goto done;
+		/* What error should we report if the URB completed normally? */
+	}
+	if (status != 0)
+		ctx->status = status;
+
+ done:
+	if (atomic_dec_and_test(&ctx->pending))
+		complete(&ctx->complete);
+}
+
+static int unlink_queued(struct usbtest_dev *dev, int pipe, unsigned num,
+		unsigned size)
+{
+	struct queued_ctx	ctx;
+	struct usb_device	*udev = testdev_to_usbdev(dev);
+	void			*buf;
+	dma_addr_t		buf_dma;
+	int			i;
+	int			retval = -ENOMEM;
+
+	init_completion(&ctx.complete);
+	atomic_set(&ctx.pending, 1);	/* One more than the actual value */
+	ctx.num = num;
+	ctx.status = 0;
+
+	buf = usb_alloc_coherent(udev, size, GFP_KERNEL, &buf_dma);
+	if (!buf)
+		return retval;
+	memset(buf, 0, size);
+
+	/* Allocate and init the urbs we'll queue */
+	ctx.urbs = kcalloc(num, sizeof(struct urb *), GFP_KERNEL);
+	if (!ctx.urbs)
+		goto free_buf;
+	for (i = 0; i < num; i++) {
+		ctx.urbs[i] = usb_alloc_urb(0, GFP_KERNEL);
+		if (!ctx.urbs[i])
+			goto free_urbs;
+		usb_fill_bulk_urb(ctx.urbs[i], udev, pipe, buf, size,
+				unlink_queued_callback, &ctx);
+		ctx.urbs[i]->transfer_dma = buf_dma;
+		ctx.urbs[i]->transfer_flags = URB_NO_TRANSFER_DMA_MAP;
+	}
+
+	/* Submit all the URBs and then unlink URBs num - 4 and num - 2. */
+	for (i = 0; i < num; i++) {
+		atomic_inc(&ctx.pending);
+		retval = usb_submit_urb(ctx.urbs[i], GFP_KERNEL);
+		if (retval != 0) {
+			dev_err(&dev->intf->dev, "submit urbs[%d] fail %d\n",
+					i, retval);
+			atomic_dec(&ctx.pending);
+			ctx.status = retval;
+			break;
+		}
+	}
+	if (i == num) {
+		usb_unlink_urb(ctx.urbs[num - 4]);
+		usb_unlink_urb(ctx.urbs[num - 2]);
+	} else {
+		while (--i >= 0)
+			usb_unlink_urb(ctx.urbs[i]);
+	}
+
+	if (atomic_dec_and_test(&ctx.pending))		/* The extra count */
+		complete(&ctx.complete);
+	wait_for_completion(&ctx.complete);
+	retval = ctx.status;
+
+ free_urbs:
+	for (i = 0; i < num; i++)
+		usb_free_urb(ctx.urbs[i]);
+	kfree(ctx.urbs);
+ free_buf:
+	usb_free_coherent(udev, size, buf, buf_dma);
+	return retval;
+}
+
+/*-------------------------------------------------------------------------*/
+
 static int verify_not_halted(struct usbtest_dev *tdev, int ep, struct urb *urb)
 {
 	int	retval;
@@ -1282,11 +1390,15 @@ static int test_halt(struct usbtest_dev *tdev, int ep, struct urb *urb)
 
 static int halt_simple(struct usbtest_dev *dev)
 {
-	int		ep;
-	int		retval = 0;
-	struct urb	*urb;
+	int			ep;
+	int			retval = 0;
+	struct urb		*urb;
+	struct usb_device	*udev = testdev_to_usbdev(dev);
 
-	urb = simple_alloc_urb(testdev_to_usbdev(dev), 0, 512);
+	if (udev->speed == USB_SPEED_SUPER)
+		urb = simple_alloc_urb(udev, 0, 1024);
+	else
+		urb = simple_alloc_urb(udev, 0, 512);
 	if (urb == NULL)
 		return -ENOMEM;
 
@@ -1483,8 +1595,8 @@ static struct urb *iso_alloc_urb(
 
 	if (bytes < 0 || !desc)
 		return NULL;
-	maxp = 0x7ff & le16_to_cpu(desc->wMaxPacketSize);
-	maxp *= 1 + (0x3 & (le16_to_cpu(desc->wMaxPacketSize) >> 11));
+	maxp = 0x7ff & usb_endpoint_maxp(desc);
+	maxp *= 1 + (0x3 & (usb_endpoint_maxp(desc) >> 11));
 	packets = DIV_ROUND_UP(bytes, maxp);
 
 	urb = usb_alloc_urb(packets, GFP_KERNEL);
@@ -1554,7 +1666,7 @@ test_iso_queue(struct usbtest_dev *dev, struct usbtest_param *param,
 		"... iso period %d %sframes, wMaxPacket %04x\n",
 		1 << (desc->bInterval - 1),
 		(udev->speed == USB_SPEED_HIGH) ? "micro" : "",
-		le16_to_cpu(desc->wMaxPacketSize));
+		usb_endpoint_maxp(desc));
 
 	for (i = 0; i < param->sglen; i++) {
 		urbs[i] = iso_alloc_urb(udev, pipe, desc,
@@ -1663,7 +1775,6 @@ static int test_unaligned_bulk(
  * off just killing the userspace task and waiting for it to exit.
  */
 
-/* No BKL needed */
 static int
 usbtest_ioctl(struct usb_interface *intf, unsigned int code, void *buf)
 {
@@ -1880,8 +1991,6 @@ usbtest_ioctl(struct usb_interface *intf, unsigned int code, void *buf)
 
 	/* queued control messaging */
 	case 10:
-		if (param->sglen == 0)
-			break;
 		retval = 0;
 		dev_info(&intf->dev,
 				"TEST 10:  queue %d control calls, %d times\n",
@@ -1969,8 +2078,6 @@ usbtest_ioctl(struct usb_interface *intf, unsigned int code, void *buf)
 		retval = test_iso_queue(dev, param,
 				dev->in_iso_pipe, dev->iso_in, 0);
 		break;
-
-	/* FIXME unlink from queue (ring with N urbs) */
 
 	/* FIXME scatterlist cancel (needs helper thread) */
 
@@ -2062,6 +2169,26 @@ usbtest_ioctl(struct usb_interface *intf, unsigned int code, void *buf)
 				param->sglen, param->length);
 		retval = test_iso_queue(dev, param,
 				dev->in_iso_pipe, dev->iso_in, 1);
+		break;
+
+	/* unlink URBs from a bulk-OUT queue */
+	case 24:
+		if (dev->out_pipe == 0 || !param->length || param->sglen < 4)
+			break;
+		retval = 0;
+		dev_info(&intf->dev, "TEST 17:  unlink from %d queues of "
+				"%d %d-byte writes\n",
+				param->iterations, param->sglen, param->length);
+		for (i = param->iterations; retval == 0 && i > 0; --i) {
+			retval = unlink_queued(dev, dev->out_pipe,
+						param->sglen, param->length);
+			if (retval) {
+				dev_err(&intf->dev,
+					"unlink queued writes failed %d, "
+					"iterations left %d\n", retval, i);
+				break;
+			}
+		}
 		break;
 
 	}
@@ -2157,6 +2284,8 @@ usbtest_probe(struct usb_interface *intf, const struct usb_device_id *id)
 			if (status < 0) {
 				WARNING(dev, "couldn't get endpoints, %d\n",
 						status);
+				kfree(dev->buf);
+				kfree(dev);
 				return status;
 			}
 			/* may find bulk or ISO pipes */
@@ -2180,22 +2309,8 @@ usbtest_probe(struct usb_interface *intf, const struct usb_device_id *id)
 
 	usb_set_intfdata(intf, dev);
 	dev_info(&intf->dev, "%s\n", info->name);
-	dev_info(&intf->dev, "%s speed {control%s%s%s%s%s} tests%s\n",
-			({ char *tmp;
-			switch (udev->speed) {
-			case USB_SPEED_LOW:
-				tmp = "low";
-				break;
-			case USB_SPEED_FULL:
-				tmp = "full";
-				break;
-			case USB_SPEED_HIGH:
-				tmp = "high";
-				break;
-			default:
-				tmp = "unknown";
-				break;
-			}; tmp; }),
+	dev_info(&intf->dev, "%s {control%s%s%s%s%s} tests%s\n",
+			usb_speed_string(udev->speed),
 			info->ctrl_out ? " in/out" : "",
 			rtest, wtest,
 			irtest, iwtest,

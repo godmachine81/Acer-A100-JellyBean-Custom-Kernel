@@ -22,8 +22,6 @@
 #define DM_MSG_PREFIX "raid1"
 
 #define MAX_RECOVERY 1	/* Maximum number of regions recovered in parallel. */
-#define DM_IO_PAGES 64
-#define DM_KCOPYD_PAGES 64
 
 #define DM_RAID1_HANDLE_ERRORS 0x01
 #define errors_handled(p)	((p)->features & DM_RAID1_HANDLE_ERRORS)
@@ -887,7 +885,7 @@ static struct mirror_set *alloc_context(unsigned int nr_mirrors,
 		return NULL;
 	}
 
-	ms->io_client = dm_io_client_create(DM_IO_PAGES);
+	ms->io_client = dm_io_client_create();
 	if (IS_ERR(ms->io_client)) {
 		ti->error = "Error creating dm_io client";
 		mempool_destroy(ms->read_record_pool);
@@ -926,8 +924,9 @@ static int get_mirror(struct mirror_set *ms, struct dm_target *ti,
 		      unsigned int mirror, char **argv)
 {
 	unsigned long long offset;
+	char dummy;
 
-	if (sscanf(argv[1], "%llu", &offset) != 1) {
+	if (sscanf(argv[1], "%llu%c", &offset, &dummy) != 1) {
 		ti->error = "Invalid offset";
 		return -EINVAL;
 	}
@@ -955,13 +954,14 @@ static struct dm_dirty_log *create_dirty_log(struct dm_target *ti,
 {
 	unsigned param_count;
 	struct dm_dirty_log *dl;
+	char dummy;
 
 	if (argc < 2) {
 		ti->error = "Insufficient mirror log arguments";
 		return NULL;
 	}
 
-	if (sscanf(argv[1], "%u", &param_count) != 1) {
+	if (sscanf(argv[1], "%u%c", &param_count, &dummy) != 1) {
 		ti->error = "Invalid mirror log argument count";
 		return NULL;
 	}
@@ -988,13 +988,14 @@ static int parse_features(struct mirror_set *ms, unsigned argc, char **argv,
 {
 	unsigned num_features;
 	struct dm_target *ti = ms->ti;
+	char dummy;
 
 	*args_used = 0;
 
 	if (!argc)
 		return 0;
 
-	if (sscanf(argv[0], "%u", &num_features) != 1) {
+	if (sscanf(argv[0], "%u%c", &num_features, &dummy) != 1) {
 		ti->error = "Invalid number of features";
 		return -EINVAL;
 	}
@@ -1038,6 +1039,7 @@ static int mirror_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	unsigned int nr_mirrors, m, args_used;
 	struct mirror_set *ms;
 	struct dm_dirty_log *dl;
+	char dummy;
 
 	dl = create_dirty_log(ti, argc, argv, &args_used);
 	if (!dl)
@@ -1046,7 +1048,7 @@ static int mirror_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	argv += args_used;
 	argc -= args_used;
 
-	if (!argc || sscanf(argv[0], "%u", &nr_mirrors) != 1 ||
+	if (!argc || sscanf(argv[0], "%u%c", &nr_mirrors, &dummy) != 1 ||
 	    nr_mirrors < 2 || nr_mirrors > DM_KCOPYD_MAX_REGIONS + 1) {
 		ti->error = "Invalid number of mirrors";
 		dm_dirty_log_destroy(dl);
@@ -1082,6 +1084,7 @@ static int mirror_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	ti->split_io = dm_rh_get_region_size(ms->rh);
 	ti->num_flush_requests = 1;
 	ti->num_discard_requests = 1;
+	ti->discard_zeroes_data_unsupported = 1;
 
 	ms->kmirrord_wq = alloc_workqueue("kmirrord",
 					  WQ_NON_REENTRANT | WQ_MEM_RECLAIM, 0);
@@ -1117,9 +1120,11 @@ static int mirror_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto err_destroy_wq;
 	}
 
-	r = dm_kcopyd_client_create(DM_KCOPYD_PAGES, &ms->kcopyd_client);
-	if (r)
+	ms->kcopyd_client = dm_kcopyd_client_create();
+	if (IS_ERR(ms->kcopyd_client)) {
+		r = PTR_ERR(ms->kcopyd_client);
 		goto err_destroy_wq;
+	}
 
 	wakeup_mirrord(ms);
 	return 0;
@@ -1210,7 +1215,7 @@ static int mirror_end_io(struct dm_target *ti, struct bio *bio,
 	 * We need to dec pending if this was a write.
 	 */
 	if (rw == WRITE) {
-		if (!(bio->bi_rw & REQ_FLUSH))
+		if (!(bio->bi_rw & (REQ_FLUSH | REQ_DISCARD)))
 			dm_rh_dec(ms->rh, map_context->ll);
 		return error;
 	}

@@ -69,7 +69,7 @@ static ssize_t map_name_show(struct uio_mem *mem, char *buf)
 
 static ssize_t map_addr_show(struct uio_mem *mem, char *buf)
 {
-	return sprintf(buf, "0x%lx\n", mem->addr);
+	return sprintf(buf, "0x%llx\n", (unsigned long long)mem->addr);
 }
 
 static ssize_t map_size_show(struct uio_mem *mem, char *buf)
@@ -79,7 +79,7 @@ static ssize_t map_size_show(struct uio_mem *mem, char *buf)
 
 static ssize_t map_offset_show(struct uio_mem *mem, char *buf)
 {
-	return sprintf(buf, "0x%lx\n", mem->addr & ~PAGE_MASK);
+	return sprintf(buf, "0x%llx\n", (unsigned long long)mem->addr & ~PAGE_MASK);
 }
 
 struct map_sysfs_entry {
@@ -381,7 +381,13 @@ static int uio_get_minor(struct uio_device *idev)
 			retval = -ENOMEM;
 		goto exit;
 	}
-	idev->minor = id & MAX_ID_MASK;
+	if (id < UIO_MAX_DEVICES) {
+		idev->minor = id;
+	} else {
+		dev_err(idev->dev, "too many uio devices\n");
+		retval = -EINVAL;
+		idr_remove(&uio_idr, id);
+	}
 exit:
 	mutex_unlock(&minor_lock);
 	return retval;
@@ -587,14 +593,12 @@ static ssize_t uio_write(struct file *filep, const char __user *buf,
 
 static int uio_find_mem_index(struct vm_area_struct *vma)
 {
-	int mi;
 	struct uio_device *idev = vma->vm_private_data;
 
-	for (mi = 0; mi < MAX_UIO_MAPS; mi++) {
-		if (idev->info->mem[mi].size == 0)
+	if (vma->vm_pgoff < MAX_UIO_MAPS) {
+		if (idev->info->mem[vma->vm_pgoff].size == 0)
 			return -1;
-		if (vma->vm_pgoff == mi)
-			return mi;
+		return (int)vma->vm_pgoff;
 	}
 	return -1;
 }
@@ -630,8 +634,7 @@ static int uio_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	if (idev->info->mem[mi].memtype == UIO_MEM_LOGICAL)
 		page = virt_to_page(idev->info->mem[mi].addr + offset);
 	else
-		page = vmalloc_to_page((void *)idev->info->mem[mi].addr
-							+ offset);
+		page = vmalloc_to_page((void *)(unsigned long)idev->info->mem[mi].addr + offset);
 	get_page(page);
 	vmf->page = page;
 	return 0;
@@ -746,14 +749,13 @@ static int uio_major_init(void)
 
 	uio_major = MAJOR(uio_dev);
 	uio_cdev = cdev;
-	result = 0;
-out:
-	return result;
+	return 0;
 out_put:
 	kobject_put(&cdev->kobj);
 out_unregister:
 	unregister_chrdev_region(uio_dev, UIO_MAX_DEVICES);
-	goto out;
+out:
+	return result;
 }
 
 static void uio_major_cleanup(void)

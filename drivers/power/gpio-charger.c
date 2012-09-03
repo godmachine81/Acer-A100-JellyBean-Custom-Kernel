@@ -54,7 +54,7 @@ static int gpio_charger_get_property(struct power_supply *psy,
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_ONLINE:
-		val->intval = gpio_get_value_cansleep(pdata->gpio);
+		val->intval = gpio_get_value(pdata->gpio);
 		val->intval ^= pdata->gpio_active_low;
 		break;
 	default:
@@ -161,26 +161,31 @@ static int __devexit gpio_charger_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
+static int gpio_charger_resume(struct device *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct gpio_charger *gpio_charger = platform_get_drvdata(pdev);
+
+	power_supply_changed(&gpio_charger->charger);
+
+	return 0;
+}
+#endif
+
+static SIMPLE_DEV_PM_OPS(gpio_charger_pm_ops, NULL, gpio_charger_resume);
+
 static struct platform_driver gpio_charger_driver = {
 	.probe = gpio_charger_probe,
 	.remove = __devexit_p(gpio_charger_remove),
 	.driver = {
 		.name = "gpio-charger",
 		.owner = THIS_MODULE,
+		.pm = &gpio_charger_pm_ops,
 	},
 };
 
-static int __init gpio_charger_init(void)
-{
-	return platform_driver_register(&gpio_charger_driver);
-}
-module_init(gpio_charger_init);
-
-static void __exit gpio_charger_exit(void)
-{
-	platform_driver_unregister(&gpio_charger_driver);
-}
-module_exit(gpio_charger_exit);
+module_platform_driver(gpio_charger_driver);
 
 MODULE_AUTHOR("Lars-Peter Clausen <lars@metafoo.de>");
 MODULE_DESCRIPTION("Driver for chargers which report their online status through a GPIO");

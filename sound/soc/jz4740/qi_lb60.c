@@ -27,11 +27,7 @@
 static int qi_lb60_spk_event(struct snd_soc_dapm_widget *widget,
 			     struct snd_kcontrol *ctrl, int event)
 {
-	int on = 0;
-	if (event & SND_SOC_DAPM_POST_PMU)
-		on = 1;
-	else if (event & SND_SOC_DAPM_PRE_PMD)
-		on = 0;
+	int on = !SND_SOC_DAPM_EVENT_OFF(event);
 
 	gpio_set_value(QI_LB60_SND_GPIO, on);
 	gpio_set_value(QI_LB60_AMP_GPIO, on);
@@ -70,12 +66,6 @@ static int qi_lb60_codec_init(struct snd_soc_pcm_runtime *rtd)
 		return ret;
 	}
 
-	snd_soc_dapm_new_controls(dapm, qi_lb60_widgets,
-				  ARRAY_SIZE(qi_lb60_widgets));
-	snd_soc_dapm_add_routes(dapm, qi_lb60_routes,
-				ARRAY_SIZE(qi_lb60_routes));
-	snd_soc_dapm_sync(dapm);
-
 	return 0;
 }
 
@@ -91,69 +81,62 @@ static struct snd_soc_dai_link qi_lb60_dai = {
 
 static struct snd_soc_card qi_lb60 = {
 	.name = "QI LB60",
+	.owner = THIS_MODULE,
 	.dai_link = &qi_lb60_dai,
 	.num_links = 1,
+
+	.dapm_widgets = qi_lb60_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(qi_lb60_widgets),
+	.dapm_routes = qi_lb60_routes,
+	.num_dapm_routes = ARRAY_SIZE(qi_lb60_routes),
 };
 
-static struct platform_device *qi_lb60_snd_device;
+static const struct gpio qi_lb60_gpios[] = {
+	{ QI_LB60_SND_GPIO, GPIOF_OUT_INIT_LOW, "SND" },
+	{ QI_LB60_AMP_GPIO, GPIOF_OUT_INIT_LOW, "AMP" },
+};
 
-static int __init qi_lb60_init(void)
+static int __devinit qi_lb60_probe(struct platform_device *pdev)
 {
+	struct snd_soc_card *card = &qi_lb60;
 	int ret;
 
-	qi_lb60_snd_device = platform_device_alloc("soc-audio", -1);
+	ret = gpio_request_array(qi_lb60_gpios, ARRAY_SIZE(qi_lb60_gpios));
+	if (ret)
+		return ret;
 
-	if (!qi_lb60_snd_device)
-		return -ENOMEM;
+	card->dev = &pdev->dev;
 
-	ret = gpio_request(QI_LB60_SND_GPIO, "SND");
+	ret = snd_soc_register_card(card);
 	if (ret) {
-		pr_err("qi_lb60 snd: Failed to request SND GPIO(%d): %d\n",
-				QI_LB60_SND_GPIO, ret);
-		goto err_device_put;
+		dev_err(&pdev->dev, "snd_soc_register_card() failed: %d\n",
+			ret);
+		gpio_free_array(qi_lb60_gpios, ARRAY_SIZE(qi_lb60_gpios));
 	}
-
-	ret = gpio_request(QI_LB60_AMP_GPIO, "AMP");
-	if (ret) {
-		pr_err("qi_lb60 snd: Failed to request AMP GPIO(%d): %d\n",
-				QI_LB60_AMP_GPIO, ret);
-		goto err_gpio_free_snd;
-	}
-
-	gpio_direction_output(QI_LB60_SND_GPIO, 0);
-	gpio_direction_output(QI_LB60_AMP_GPIO, 0);
-
-	platform_set_drvdata(qi_lb60_snd_device, &qi_lb60);
-
-	ret = platform_device_add(qi_lb60_snd_device);
-	if (ret) {
-		pr_err("qi_lb60 snd: Failed to add snd soc device: %d\n", ret);
-		goto err_unset_pdata;
-	}
-
-	 return 0;
-
-err_unset_pdata:
-	platform_set_drvdata(qi_lb60_snd_device, NULL);
-/*err_gpio_free_amp:*/
-	gpio_free(QI_LB60_AMP_GPIO);
-err_gpio_free_snd:
-	gpio_free(QI_LB60_SND_GPIO);
-err_device_put:
-	platform_device_put(qi_lb60_snd_device);
-
 	return ret;
 }
-module_init(qi_lb60_init);
 
-static void __exit qi_lb60_exit(void)
+static int __devexit qi_lb60_remove(struct platform_device *pdev)
 {
-	gpio_free(QI_LB60_AMP_GPIO);
-	gpio_free(QI_LB60_SND_GPIO);
-	platform_device_unregister(qi_lb60_snd_device);
+	struct snd_soc_card *card = platform_get_drvdata(pdev);
+
+	snd_soc_unregister_card(card);
+	gpio_free_array(qi_lb60_gpios, ARRAY_SIZE(qi_lb60_gpios));
+	return 0;
 }
-module_exit(qi_lb60_exit);
+
+static struct platform_driver qi_lb60_driver = {
+	.driver		= {
+		.name	= "qi-lb60-audio",
+		.owner	= THIS_MODULE,
+	},
+	.probe		= qi_lb60_probe,
+	.remove		= __devexit_p(qi_lb60_remove),
+};
+
+module_platform_driver(qi_lb60_driver);
 
 MODULE_AUTHOR("Lars-Peter Clausen <lars@metafoo.de>");
 MODULE_DESCRIPTION("ALSA SoC QI LB60 Audio support");
 MODULE_LICENSE("GPL v2");
+MODULE_ALIAS("platform:qi-lb60-audio");

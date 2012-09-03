@@ -735,11 +735,6 @@ static void rt2500pci_start_queue(struct data_queue *queue)
 		rt2x00pci_register_write(rt2x00dev, RXCSR0, reg);
 		break;
 	case QID_BEACON:
-		/*
-		 * Allow the tbtt tasklet to be scheduled.
-		 */
-		tasklet_enable(&rt2x00dev->tbtt_tasklet);
-
 		rt2x00pci_register_read(rt2x00dev, CSR14, &reg);
 		rt2x00_set_field32(&reg, CSR14_TSF_COUNT, 1);
 		rt2x00_set_field32(&reg, CSR14_TBCN, 1);
@@ -805,7 +800,7 @@ static void rt2500pci_stop_queue(struct data_queue *queue)
 		/*
 		 * Wait for possibly running tbtt tasklets.
 		 */
-		tasklet_disable(&rt2x00dev->tbtt_tasklet);
+		tasklet_kill(&rt2x00dev->tbtt_tasklet);
 		break;
 	default:
 		break;
@@ -1137,12 +1132,6 @@ static void rt2500pci_toggle_irq(struct rt2x00_dev *rt2x00dev,
 	if (state == STATE_RADIO_IRQ_ON) {
 		rt2x00pci_register_read(rt2x00dev, CSR7, &reg);
 		rt2x00pci_register_write(rt2x00dev, CSR7, reg);
-
-		/*
-		 * Enable tasklets.
-		 */
-		tasklet_enable(&rt2x00dev->txstatus_tasklet);
-		tasklet_enable(&rt2x00dev->rxdone_tasklet);
 	}
 
 	/*
@@ -1165,8 +1154,9 @@ static void rt2500pci_toggle_irq(struct rt2x00_dev *rt2x00dev,
 		/*
 		 * Ensure that all tasklets are finished.
 		 */
-		tasklet_disable(&rt2x00dev->txstatus_tasklet);
-		tasklet_disable(&rt2x00dev->rxdone_tasklet);
+		tasklet_kill(&rt2x00dev->txstatus_tasklet);
+		tasklet_kill(&rt2x00dev->rxdone_tasklet);
+		tasklet_kill(&rt2x00dev->tbtt_tasklet);
 	}
 }
 
@@ -1446,8 +1436,8 @@ static void rt2500pci_txdone(struct rt2x00_dev *rt2x00dev,
 	}
 }
 
-static void rt2500pci_enable_interrupt(struct rt2x00_dev *rt2x00dev,
-				       struct rt2x00_field32 irq_field)
+static inline void rt2500pci_enable_interrupt(struct rt2x00_dev *rt2x00dev,
+					      struct rt2x00_field32 irq_field)
 {
 	u32 reg;
 
@@ -1479,29 +1469,34 @@ static void rt2500pci_txstatus_tasklet(unsigned long data)
 	/*
 	 * Enable all TXDONE interrupts again.
 	 */
-	spin_lock_irq(&rt2x00dev->irqmask_lock);
+	if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags)) {
+		spin_lock_irq(&rt2x00dev->irqmask_lock);
 
-	rt2x00pci_register_read(rt2x00dev, CSR8, &reg);
-	rt2x00_set_field32(&reg, CSR8_TXDONE_TXRING, 0);
-	rt2x00_set_field32(&reg, CSR8_TXDONE_ATIMRING, 0);
-	rt2x00_set_field32(&reg, CSR8_TXDONE_PRIORING, 0);
-	rt2x00pci_register_write(rt2x00dev, CSR8, reg);
+		rt2x00pci_register_read(rt2x00dev, CSR8, &reg);
+		rt2x00_set_field32(&reg, CSR8_TXDONE_TXRING, 0);
+		rt2x00_set_field32(&reg, CSR8_TXDONE_ATIMRING, 0);
+		rt2x00_set_field32(&reg, CSR8_TXDONE_PRIORING, 0);
+		rt2x00pci_register_write(rt2x00dev, CSR8, reg);
 
-	spin_unlock_irq(&rt2x00dev->irqmask_lock);
+		spin_unlock_irq(&rt2x00dev->irqmask_lock);
+	}
 }
 
 static void rt2500pci_tbtt_tasklet(unsigned long data)
 {
 	struct rt2x00_dev *rt2x00dev = (struct rt2x00_dev *)data;
 	rt2x00lib_beacondone(rt2x00dev);
-	rt2500pci_enable_interrupt(rt2x00dev, CSR8_TBCN_EXPIRE);
+	if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags))
+		rt2500pci_enable_interrupt(rt2x00dev, CSR8_TBCN_EXPIRE);
 }
 
 static void rt2500pci_rxdone_tasklet(unsigned long data)
 {
 	struct rt2x00_dev *rt2x00dev = (struct rt2x00_dev *)data;
-	rt2x00pci_rxdone(rt2x00dev);
-	rt2500pci_enable_interrupt(rt2x00dev, CSR8_RXDONE);
+	if (rt2x00pci_rxdone(rt2x00dev))
+		tasklet_schedule(&rt2x00dev->rxdone_tasklet);
+	else if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags))
+		rt2500pci_enable_interrupt(rt2x00dev, CSR8_RXDONE);
 }
 
 static irqreturn_t rt2500pci_interrupt(int irq, void *dev_instance)
@@ -1685,14 +1680,14 @@ static int rt2500pci_init_eeprom(struct rt2x00_dev *rt2x00dev)
 	 * Detect if this device has an hardware controlled radio.
 	 */
 	if (rt2x00_get_field16(eeprom, EEPROM_ANTENNA_HARDWARE_RADIO))
-		__set_bit(CONFIG_SUPPORT_HW_BUTTON, &rt2x00dev->flags);
+		__set_bit(CAPABILITY_HW_BUTTON, &rt2x00dev->cap_flags);
 
 	/*
 	 * Check if the BBP tuning should be enabled.
 	 */
 	rt2x00_eeprom_read(rt2x00dev, EEPROM_NIC, &eeprom);
 	if (!rt2x00_get_field16(eeprom, EEPROM_NIC_DYN_BBP_TUNE))
-		__set_bit(DRIVER_SUPPORT_LINK_TUNING, &rt2x00dev->flags);
+		__set_bit(CAPABILITY_LINK_TUNING, &rt2x00dev->cap_flags);
 
 	/*
 	 * Read the RSSI <-> dBm offset information.
@@ -1956,9 +1951,9 @@ static int rt2500pci_probe_hw(struct rt2x00_dev *rt2x00dev)
 	/*
 	 * This device requires the atim queue and DMA-mapped skbs.
 	 */
-	__set_bit(DRIVER_REQUIRE_ATIM_QUEUE, &rt2x00dev->flags);
-	__set_bit(DRIVER_REQUIRE_DMA, &rt2x00dev->flags);
-	__set_bit(DRIVER_REQUIRE_SW_SEQNO, &rt2x00dev->flags);
+	__set_bit(REQUIRE_ATIM_QUEUE, &rt2x00dev->cap_flags);
+	__set_bit(REQUIRE_DMA, &rt2x00dev->cap_flags);
+	__set_bit(REQUIRE_SW_SEQNO, &rt2x00dev->cap_flags);
 
 	/*
 	 * Set the rssi offset.
@@ -1971,7 +1966,8 @@ static int rt2500pci_probe_hw(struct rt2x00_dev *rt2x00dev)
 /*
  * IEEE80211 stack callback functions.
  */
-static u64 rt2500pci_get_tsf(struct ieee80211_hw *hw)
+static u64 rt2500pci_get_tsf(struct ieee80211_hw *hw,
+			     struct ieee80211_vif *vif)
 {
 	struct rt2x00_dev *rt2x00dev = hw->priv;
 	u64 tsf;
@@ -2011,6 +2007,10 @@ static const struct ieee80211_ops rt2500pci_mac80211_ops = {
 	.tx_last_beacon		= rt2500pci_tx_last_beacon,
 	.rfkill_poll		= rt2x00mac_rfkill_poll,
 	.flush			= rt2x00mac_flush,
+	.set_antenna		= rt2x00mac_set_antenna,
+	.get_antenna		= rt2x00mac_get_antenna,
+	.get_ringparam		= rt2x00mac_get_ringparam,
+	.tx_frames_pending	= rt2x00mac_tx_frames_pending,
 };
 
 static const struct rt2x00lib_ops rt2500pci_rt2x00_ops = {
@@ -2031,6 +2031,7 @@ static const struct rt2x00lib_ops rt2500pci_rt2x00_ops = {
 	.start_queue		= rt2500pci_start_queue,
 	.kick_queue		= rt2500pci_kick_queue,
 	.stop_queue		= rt2500pci_stop_queue,
+	.flush_queue		= rt2x00pci_flush_queue,
 	.write_tx_desc		= rt2500pci_write_tx_desc,
 	.write_beacon		= rt2500pci_write_beacon,
 	.fill_rxdone		= rt2500pci_fill_rxdone,
@@ -2092,7 +2093,7 @@ static const struct rt2x00_ops rt2500pci_ops = {
  * RT2500pci module information.
  */
 static DEFINE_PCI_DEVICE_TABLE(rt2500pci_device_table) = {
-	{ PCI_DEVICE(0x1814, 0x0201), PCI_DEVICE_DATA(&rt2500pci_ops) },
+	{ PCI_DEVICE(0x1814, 0x0201) },
 	{ 0, }
 };
 
@@ -2103,24 +2104,19 @@ MODULE_SUPPORTED_DEVICE("Ralink RT2560 PCI & PCMCIA chipset based cards");
 MODULE_DEVICE_TABLE(pci, rt2500pci_device_table);
 MODULE_LICENSE("GPL");
 
+static int rt2500pci_probe(struct pci_dev *pci_dev,
+			   const struct pci_device_id *id)
+{
+	return rt2x00pci_probe(pci_dev, &rt2500pci_ops);
+}
+
 static struct pci_driver rt2500pci_driver = {
 	.name		= KBUILD_MODNAME,
 	.id_table	= rt2500pci_device_table,
-	.probe		= rt2x00pci_probe,
+	.probe		= rt2500pci_probe,
 	.remove		= __devexit_p(rt2x00pci_remove),
 	.suspend	= rt2x00pci_suspend,
 	.resume		= rt2x00pci_resume,
 };
 
-static int __init rt2500pci_init(void)
-{
-	return pci_register_driver(&rt2500pci_driver);
-}
-
-static void __exit rt2500pci_exit(void)
-{
-	pci_unregister_driver(&rt2500pci_driver);
-}
-
-module_init(rt2500pci_init);
-module_exit(rt2500pci_exit);
+module_pci_driver(rt2500pci_driver);

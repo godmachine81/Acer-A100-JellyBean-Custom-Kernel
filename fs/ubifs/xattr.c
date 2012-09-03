@@ -80,8 +80,8 @@ enum {
 	SECURITY_XATTR,
 };
 
-static const struct inode_operations none_inode_operations;
-static const struct file_operations none_file_operations;
+static const struct inode_operations empty_iops;
+static const struct file_operations empty_fops;
 
 /**
  * create_xattr - create an extended attribute.
@@ -131,19 +131,18 @@ static int create_xattr(struct ubifs_info *c, struct inode *host,
 
 	/* Re-define all operations to be "nothing" */
 	inode->i_mapping->a_ops = &empty_aops;
-	inode->i_op = &none_inode_operations;
-	inode->i_fop = &none_file_operations;
+	inode->i_op = &empty_iops;
+	inode->i_fop = &empty_fops;
 
 	inode->i_flags |= S_SYNC | S_NOATIME | S_NOCMTIME | S_NOQUOTA;
 	ui = ubifs_inode(inode);
 	ui->xattr = 1;
 	ui->flags |= UBIFS_XATTR_FL;
-	ui->data = kmalloc(size, GFP_NOFS);
+	ui->data = kmemdup(value, size, GFP_NOFS);
 	if (!ui->data) {
 		err = -ENOMEM;
 		goto out_free;
 	}
-	memcpy(ui->data, value, size);
 	inode->i_size = ui->ui_size = size;
 	ui->data_len = size;
 
@@ -204,12 +203,11 @@ static int change_xattr(struct ubifs_info *c, struct inode *host,
 		return err;
 
 	kfree(ui->data);
-	ui->data = kmalloc(size, GFP_NOFS);
+	ui->data = kmemdup(value, size, GFP_NOFS);
 	if (!ui->data) {
 		err = -ENOMEM;
 		goto out_free;
 	}
-	memcpy(ui->data, value, size);
 	inode->i_size = ui->ui_size = size;
 	ui->data_len = size;
 
@@ -300,7 +298,7 @@ int ubifs_setxattr(struct dentry *dentry, const char *name,
 {
 	struct inode *inode, *host = dentry->d_inode;
 	struct ubifs_info *c = host->i_sb->s_fs_info;
-	struct qstr nm = { .name = name, .len = strlen(name) };
+	struct qstr nm = QSTR_INIT(name, strlen(name));
 	struct ubifs_dent_node *xent;
 	union ubifs_key key;
 	int err, type;
@@ -363,7 +361,7 @@ ssize_t ubifs_getxattr(struct dentry *dentry, const char *name, void *buf,
 {
 	struct inode *inode, *host = dentry->d_inode;
 	struct ubifs_info *c = host->i_sb->s_fs_info;
-	struct qstr nm = { .name = name, .len = strlen(name) };
+	struct qstr nm = QSTR_INIT(name, strlen(name));
 	struct ubifs_inode *ui;
 	struct ubifs_dent_node *xent;
 	union ubifs_key key;
@@ -401,8 +399,8 @@ ssize_t ubifs_getxattr(struct dentry *dentry, const char *name, void *buf,
 	if (buf) {
 		/* If @buf is %NULL we are supposed to return the length */
 		if (ui->data_len > size) {
-			dbg_err("buffer size %zd, xattr len %d",
-				size, ui->data_len);
+			ubifs_err("buffer size %zd, xattr len %d",
+				  size, ui->data_len);
 			err = -ERANGE;
 			goto out_iput;
 		}
@@ -526,7 +524,7 @@ int ubifs_removexattr(struct dentry *dentry, const char *name)
 {
 	struct inode *inode, *host = dentry->d_inode;
 	struct ubifs_info *c = host->i_sb->s_fs_info;
-	struct qstr nm = { .name = name, .len = strlen(name) };
+	struct qstr nm = QSTR_INIT(name, strlen(name));
 	struct ubifs_dent_node *xent;
 	union ubifs_key key;
 	int err;
@@ -558,10 +556,10 @@ int ubifs_removexattr(struct dentry *dentry, const char *name)
 	}
 
 	ubifs_assert(inode->i_nlink == 1);
-	inode->i_nlink = 0;
+	clear_nlink(inode);
 	err = remove_xattr(c, host, inode, &nm);
 	if (err)
-		inode->i_nlink = 1;
+		set_nlink(inode, 1);
 
 	/* If @i_nlink is 0, 'iput()' will delete the inode */
 	iput(inode);

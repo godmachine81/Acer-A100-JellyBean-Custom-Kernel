@@ -33,7 +33,7 @@
 
 /* Module Parameters */
 static unsigned int num_modules = CMODIO_MAX_MODULES;
-static unsigned char *modules[CMODIO_MAX_MODULES] = {
+static char *modules[CMODIO_MAX_MODULES] = {
 	"empty", "empty", "empty", "empty",
 };
 
@@ -86,7 +86,8 @@ static int __devinit cmodio_setup_subdevice(struct cmodio_device *priv,
 
 	/* Add platform data */
 	pdata->modno = modno;
-	cell->mfd_data = pdata;
+	cell->platform_data = pdata;
+	cell->pdata_size = sizeof(*pdata);
 
 	/* MODULbus registers -- PCI BAR3 is big-endian MODULbus access */
 	res->flags = IORESOURCE_MEM;
@@ -282,23 +283,8 @@ static struct pci_driver cmodio_pci_driver = {
 	.remove   = __devexit_p(cmodio_pci_remove),
 };
 
-/*
- * Module Init / Exit
- */
-
-static int __init cmodio_init(void)
-{
-	return pci_register_driver(&cmodio_pci_driver);
-}
-
-static void __exit cmodio_exit(void)
-{
-	pci_unregister_driver(&cmodio_pci_driver);
-}
+module_pci_driver(cmodio_pci_driver);
 
 MODULE_AUTHOR("Ira W. Snyder <iws@ovro.caltech.edu>");
 MODULE_DESCRIPTION("Janz CMOD-IO PCI MODULbus Carrier Board Driver");
 MODULE_LICENSE("GPL");
-
-module_init(cmodio_init);
-module_exit(cmodio_exit);

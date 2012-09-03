@@ -3,6 +3,7 @@
 #include <linux/ipv6.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv6.h>
+#include <linux/export.h>
 #include <net/dst.h>
 #include <net/ipv6.h>
 #include <net/ip6_route.h>
@@ -13,7 +14,7 @@
 int ip6_route_me_harder(struct sk_buff *skb)
 {
 	struct net *net = dev_net(skb_dst(skb)->dev);
-	struct ipv6hdr *iph = ipv6_hdr(skb);
+	const struct ipv6hdr *iph = ipv6_hdr(skb);
 	struct dst_entry *dst;
 	struct flowi6 fl6 = {
 		.flowi6_oif = skb->sk ? skb->sk->sk_bound_dev_if : 0,
@@ -67,7 +68,7 @@ static void nf_ip6_saveroute(const struct sk_buff *skb,
 	struct ip6_rt_info *rt_info = nf_queue_entry_reroute(entry);
 
 	if (entry->hook == NF_INET_LOCAL_OUT) {
-		struct ipv6hdr *iph = ipv6_hdr(skb);
+		const struct ipv6hdr *iph = ipv6_hdr(skb);
 
 		rt_info->daddr = iph->daddr;
 		rt_info->saddr = iph->saddr;
@@ -81,7 +82,7 @@ static int nf_ip6_reroute(struct sk_buff *skb,
 	struct ip6_rt_info *rt_info = nf_queue_entry_reroute(entry);
 
 	if (entry->hook == NF_INET_LOCAL_OUT) {
-		struct ipv6hdr *iph = ipv6_hdr(skb);
+		const struct ipv6hdr *iph = ipv6_hdr(skb);
 		if (!ipv6_addr_equal(&iph->daddr, &rt_info->daddr) ||
 		    !ipv6_addr_equal(&iph->saddr, &rt_info->saddr) ||
 		    skb->mark != rt_info->mark)
@@ -100,15 +101,22 @@ static int nf_ip6_route(struct net *net, struct dst_entry **dst,
 		.pinet6 = (struct ipv6_pinfo *) &fake_pinfo,
 	};
 	const void *sk = strict ? &fake_sk : NULL;
+	struct dst_entry *result;
+	int err;
 
-	*dst = ip6_route_output(net, sk, &fl->u.ip6);
-	return (*dst)->error;
+	result = ip6_route_output(net, sk, &fl->u.ip6);
+	err = result->error;
+	if (err)
+		dst_release(result);
+	else
+		*dst = result;
+	return err;
 }
 
 __sum16 nf_ip6_checksum(struct sk_buff *skb, unsigned int hook,
 			     unsigned int dataoff, u_int8_t protocol)
 {
-	struct ipv6hdr *ip6h = ipv6_hdr(skb);
+	const struct ipv6hdr *ip6h = ipv6_hdr(skb);
 	__sum16 csum = 0;
 
 	switch (skb->ip_summed) {
@@ -142,7 +150,7 @@ static __sum16 nf_ip6_checksum_partial(struct sk_buff *skb, unsigned int hook,
 				       unsigned int dataoff, unsigned int len,
 				       u_int8_t protocol)
 {
-	struct ipv6hdr *ip6h = ipv6_hdr(skb);
+	const struct ipv6hdr *ip6h = ipv6_hdr(skb);
 	__wsum hsum;
 	__sum16 csum = 0;
 

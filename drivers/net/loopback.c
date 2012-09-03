@@ -41,7 +41,6 @@
 #include <linux/in.h>
 #include <linux/init.h>
 
-#include <asm/system.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
 
@@ -169,12 +168,13 @@ static void loopback_setup(struct net_device *dev)
 	dev->features 		= NETIF_F_SG | NETIF_F_FRAGLIST
 		| NETIF_F_ALL_TSO
 		| NETIF_F_UFO
-		| NETIF_F_NO_CSUM
+		| NETIF_F_HW_CSUM
 		| NETIF_F_RXCSUM
 		| NETIF_F_HIGHDMA
 		| NETIF_F_LLTX
 		| NETIF_F_NETNS_LOCAL
-		| NETIF_F_VLAN_CHALLENGED;
+		| NETIF_F_VLAN_CHALLENGED
+		| NETIF_F_LOOPBACK;
 	dev->ethtool_ops	= &loopback_ethtool_ops;
 	dev->header_ops		= &eth_header_ops;
 	dev->netdev_ops		= &loopback_ops;

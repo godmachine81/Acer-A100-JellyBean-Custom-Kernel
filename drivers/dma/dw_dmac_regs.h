@@ -2,6 +2,7 @@
  * Driver for the Synopsys DesignWare AHB DMA Controller
  *
  * Copyright (C) 2005-2007 Atmel Corporation
+ * Copyright (C) 2010-2011 ST Microelectronics
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -11,6 +12,18 @@
 #include <linux/dw_dmac.h>
 
 #define DW_DMA_MAX_NR_CHANNELS	8
+
+/* flow controller */
+enum dw_dma_fc {
+	DW_DMA_FC_D_M2M,
+	DW_DMA_FC_D_M2P,
+	DW_DMA_FC_D_P2M,
+	DW_DMA_FC_D_P2P,
+	DW_DMA_FC_P_P2M,
+	DW_DMA_FC_SP_P2P,
+	DW_DMA_FC_P_M2P,
+	DW_DMA_FC_DP_P2P,
+};
 
 /*
  * Redefine this macro to handle differences between 32- and 64-bit
@@ -138,18 +151,22 @@ struct dw_dma_chan {
 	void __iomem		*ch_regs;
 	u8			mask;
 	u8			priority;
+	bool			paused;
+	bool			initialized;
 
 	spinlock_t		lock;
 
 	/* these other elements are all protected by lock */
 	unsigned long		flags;
-	dma_cookie_t		completed;
 	struct list_head	active_list;
 	struct list_head	queue;
 	struct list_head	free_list;
 	struct dw_cyclic_desc	*cdesc;
 
 	unsigned int		descs_allocated;
+
+	/* configuration passed via DMA_SLAVE_CONFIG */
+	struct dma_slave_config dma_sconfig;
 };
 
 static inline struct dw_dma_chan_regs __iomem *

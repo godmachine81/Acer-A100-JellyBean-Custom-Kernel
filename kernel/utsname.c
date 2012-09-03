@@ -9,12 +9,13 @@
  *  License.
  */
 
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/uts.h>
 #include <linux/utsname.h>
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/user_namespace.h>
+#include <linux/proc_fs.h>
 
 static struct uts_namespace *create_uts_ns(void)
 {
@@ -42,7 +43,7 @@ static struct uts_namespace *clone_uts_ns(struct task_struct *tsk,
 
 	down_read(&uts_sem);
 	memcpy(&ns->name, &old_ns->name, sizeof(ns->name));
-	ns->user_ns = get_user_ns(task_cred_xxx(tsk, user)->user_ns);
+	ns->user_ns = get_user_ns(task_cred_xxx(tsk, user_ns));
 	up_read(&uts_sem);
 	return ns;
 }
@@ -79,3 +80,41 @@ void free_uts_ns(struct kref *kref)
 	put_user_ns(ns->user_ns);
 	kfree(ns);
 }
+
+static void *utsns_get(struct task_struct *task)
+{
+	struct uts_namespace *ns = NULL;
+	struct nsproxy *nsproxy;
+
+	rcu_read_lock();
+	nsproxy = task_nsproxy(task);
+	if (nsproxy) {
+		ns = nsproxy->uts_ns;
+		get_uts_ns(ns);
+	}
+	rcu_read_unlock();
+
+	return ns;
+}
+
+static void utsns_put(void *ns)
+{
+	put_uts_ns(ns);
+}
+
+static int utsns_install(struct nsproxy *nsproxy, void *ns)
+{
+	get_uts_ns(ns);
+	put_uts_ns(nsproxy->uts_ns);
+	nsproxy->uts_ns = ns;
+	return 0;
+}
+
+const struct proc_ns_operations utsns_operations = {
+	.name		= "uts",
+	.type		= CLONE_NEWUTS,
+	.get		= utsns_get,
+	.put		= utsns_put,
+	.install	= utsns_install,
+};
+

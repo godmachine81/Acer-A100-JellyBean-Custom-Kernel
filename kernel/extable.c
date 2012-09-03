@@ -35,10 +35,16 @@ DEFINE_MUTEX(text_mutex);
 extern struct exception_table_entry __start___ex_table[];
 extern struct exception_table_entry __stop___ex_table[];
 
+/* Cleared by build time tools if the table is already sorted. */
+u32 __initdata main_extable_sort_needed = 1;
+
 /* Sort the kernel's built-in exception table */
 void __init sort_main_extable(void)
 {
-	sort_extable(__start___ex_table, __stop___ex_table);
+	if (main_extable_sort_needed)
+		sort_extable(__start___ex_table, __stop___ex_table);
+	else
+		pr_notice("__ex_table already sorted, skipping sort\n");
 }
 
 /* Given an address, look for it in the exception tables. */
@@ -68,6 +74,24 @@ int core_kernel_text(unsigned long addr)
 
 	if (system_state == SYSTEM_BOOTING &&
 	    init_kernel_text(addr))
+		return 1;
+	return 0;
+}
+
+/**
+ * core_kernel_data - tell if addr points to kernel data
+ * @addr: address to test
+ *
+ * Returns true if @addr passed in is from the core kernel data
+ * section.
+ *
+ * Note: On some archs it may return true for core RODATA, and false
+ *  for others. But will always be true for core RW data.
+ */
+int core_kernel_data(unsigned long addr)
+{
+	if (addr >= (unsigned long)_sdata &&
+	    addr < (unsigned long)_edata)
 		return 1;
 	return 0;
 }
