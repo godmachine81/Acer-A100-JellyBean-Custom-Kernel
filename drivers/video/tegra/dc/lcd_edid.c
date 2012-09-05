@@ -60,7 +60,7 @@ static int __init lcd_edid_init(void)
 
     ret = tegra_edid_get_monspecs(lcdedid->edid, lcdedid->specs);
     if (ret < 0) {
-        pr_err("error reading edid\n");
+      //  pr_err("error reading edid\n");
     }
     return 0;
 }

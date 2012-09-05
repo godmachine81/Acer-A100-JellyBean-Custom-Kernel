@@ -405,9 +405,23 @@ static irqreturn_t tegra_i2c_isr(int irq, void *dev_id)
 	}
 
 	if (unlikely(status & status_err)) {
+<<<<<<< HEAD
 		if (status & I2C_INT_NO_ACK)
 			i2c_dev->msg_err |= I2C_ERR_NO_ACK;
 		if (status & I2C_INT_ARBITRATION_LOST)
+=======
+		//dev_warn(i2c_dev->dev, "I2c error status 0x%08x\n", status);
+		if (status & I2C_INT_NO_ACK) {
+			i2c_dev->msg_err |= I2C_ERR_NO_ACK;
+			//Until we fix this I2C error with the Iconia tabs, lets supress dmesg errors/warnings
+			/*dev_warn(i2c_dev->dev, "no acknowledge from address"
+					" 0x%x\n", i2c_dev->msg_add);
+			dev_warn(i2c_dev->dev, "Packet status 0x%08x\n",
+				i2c_readl(i2c_dev, I2C_PACKET_TRANSFER_STATUS)); */
+		}
+
+		if (status & I2C_INT_ARBITRATION_LOST) {
+>>>>>>> a53f3f4063b88e140d8c242128b7aa4e3316a380
 			i2c_dev->msg_err |= I2C_ERR_ARBITRATION_LOST;
 		goto err;
 	}

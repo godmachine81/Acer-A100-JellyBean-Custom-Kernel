@@ -1417,6 +1417,11 @@ choice
 	help
 	   This option allows to select a slab allocator.
 
+config SLQB	
+	bool "SLQB (Queued allocator)"
+	help
+ 	  SLQB is a proposed new slab allocator.
+
 config SLAB
 	bool "SLAB"
 	help
@@ -1490,7 +1495,7 @@ config HAVE_GENERIC_DMA_COHERENT
 config SLABINFO
 	bool
 	depends on PROC_FS
-	depends on SLAB || SLUB_DEBUG
+	depends on SLAB || SLUB_DEBUG || SLQB
 	default y
 
 config RT_MUTEXES
