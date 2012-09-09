@@ -2896,9 +2896,9 @@ static int __init fsl_udc_probe(struct platform_device *pdev)
 	/* Get the regulator for drawing the vbus current in udc driver */
 	udc_controller->vbus_regulator = regulator_get(NULL, "usb_bat_chg");
 	if (IS_ERR(udc_controller->vbus_regulator)) {
-		dev_err(&pdev->dev,
+		/*dev_err(&pdev->dev,
 			"can't get charge regulator,err:%ld\n",
-			PTR_ERR(udc_controller->vbus_regulator));
+			PTR_ERR(udc_controller->vbus_regulator));*/
 		udc_controller->vbus_regulator = NULL;
 	}
 

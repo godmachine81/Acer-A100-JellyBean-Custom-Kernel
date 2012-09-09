@@ -237,7 +237,7 @@ static int bcm4329_rfkill_probe(struct platform_device *pdev)
 		ret = gpio_request(bcm4329_rfkill->gpio_reset,
 						"bcm4329_nreset_gpio");
 	} else {
-		pr_warn("%s : can't find reset gpio.\n", __func__);
+	//	pr_warn("%s : can't find reset gpio.\n", __func__);
 		bcm4329_rfkill->gpio_reset = 0;
 	}
 

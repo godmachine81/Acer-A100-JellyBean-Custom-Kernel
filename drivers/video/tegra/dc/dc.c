@@ -2747,7 +2747,7 @@ static int tegra_dc_probe(struct nvhost_device *ndev)
 
 	dc->ext = tegra_dc_ext_register(ndev, dc);
 	if (IS_ERR_OR_NULL(dc->ext)) {
-		dev_warn(&ndev->dev, "Failed to enable Tegra DC extensions.\n");
+		//dev_warn(&ndev->dev, "Failed to enable Tegra DC extensions.\n");
 		dc->ext = NULL;
 	}
 
