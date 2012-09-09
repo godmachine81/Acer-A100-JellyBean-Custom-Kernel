@@ -2597,6 +2597,23 @@ static int __init fsl_udc_probe(struct platform_device *pdev)
 		ret = -ENOMEM;
 		goto err_unregister;
 	}
+<<<<<<< HEAD
+=======
+	create_proc_file();
+
+	/* create a delayed work for detecting the USB charger */
+	INIT_DELAYED_WORK(&udc_controller->work, fsl_udc_charger_detect_work);
+	INIT_WORK(&udc_controller->charger_work, fsl_udc_set_current_limit_work);
+
+	/* Get the regulator for drawing the vbus current in udc driver */
+	udc_controller->vbus_regulator = regulator_get(NULL, "usb_bat_chg");
+	if (IS_ERR(udc_controller->vbus_regulator)) {
+		/*dev_err(&pdev->dev,
+			"can't get charge regulator,err:%ld\n",
+			PTR_ERR(udc_controller->vbus_regulator));*/
+		udc_controller->vbus_regulator = NULL;
+	}
+>>>>>>> 4dd30bb154be5e9502a614d97412ef088f4fefc8
 
 	ret = usb_add_gadget_udc(&pdev->dev, &udc_controller->gadget);
 	if (ret)
